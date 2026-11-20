@@ -2290,10 +2290,7 @@ function UI.executeFlingSingle(targetPlayer)
     local oldHeight = workspace.FallenPartsDestroyHeight
     local animate, animateWasDisabled
     local spin
-    -- Las velocidades extremas de la version de PC lanzaban tambien al
-    -- personaje local en dispositivos tactiles. Esta ruta prioriza que
-    -- el jugador recupere el movimiento normal y no salga despedido.
-    local touchSafeMode = UIS.TouchEnabled
+    -- Misma ruta de fisica en PC y movil; sin modo alternativo tactil.
     local collisionSaved = {}
     local ok, err = pcall(function()
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
@@ -2301,18 +2298,14 @@ function UI.executeFlingSingle(targetPlayer)
         hum.AutoRotate = false
         animate, animateWasDisabled = UI.pauseFlingAnimations(char, hum)
         UI.setFlingCollision(char, true, collisionSaved)
-        if not touchSafeMode then
-            spin = Instance.new("BodyAngularVelocity")
-            spin.Name = "XoniHubSpin"
-            spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-            spin.P = math.huge
-            spin.AngularVelocity = Vector3.new(0, 9e20, 0)
-            spin.Parent = root
-        end
+        spin = Instance.new("BodyAngularVelocity")
+        spin.Name = "XoniHubSpin"
+        spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        spin.P = math.huge
+        spin.AngularVelocity = Vector3.new(0, 9e20, 0)
+        spin.Parent = root
         local started = os.clock()
-        -- En tactil solo se comprueba brevemente la alineacion. No se
-        -- mantiene la fuerza extrema de fling en el rig local.
-        local duration = touchSafeMode and 0.15 or 2
+        local duration = 2
         while os.clock() - started < duration and not state.closing do
             local targetRoot = UI.getTargetRoot(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
@@ -2320,13 +2313,8 @@ function UI.executeFlingSingle(targetPlayer)
             -- El servidor aun puede corregir posiciones por su propia fisica.
             if not UI.alignFlingCharacter(char, root, targetRoot) then break end
             UI.setFlingCollision(char, true, collisionSaved)
-            if touchSafeMode then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            else
-                root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-                root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
-            end
+            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
+            root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
         end
     end)
@@ -2531,7 +2519,7 @@ connect(UI.flingButton.Activated,function()
     end
     task.spawn(function()
         local ok = UI.executeFlingSingle(target)
-        local message = ok and (UIS.TouchEnabled and "Regreso seguro completado (sin fuerza extrema en móvil)" or "Acción finalizada (resultado sujeto al servidor)") or "No se pudo ejecutar"
+        local message = ok and "Acción finalizada (resultado sujeto al servidor)" or "No se pudo ejecutar"
         notify("Fling", message, ok and C.mint or C.orange)
     end)
 end)
