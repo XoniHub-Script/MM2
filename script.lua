@@ -1,4 +1,4 @@
--- XONI HUB V48 | Retorno estable tras Fling en PC y movil
+-- XONI HUB V49 | Recuperacion de movimiento local reforzada en PC y movil
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
 -- Detecta Knife o Gun dentro de Character y Backpack cuando son visibles al cliente.
@@ -2316,68 +2316,84 @@ function UI.executeFlingSingle(targetPlayer)
             RunService.Heartbeat:Wait()
         end
     end)
-    -- Recuperacion V48: el impulso puede reaparecer uno o varios Heartbeats
-    -- despues de restaurar el pivote (especialmente en dispositivos moviles).
-    -- Destruir primero TODOS los actuadores temporales de este Fling.
+    -- V49: la restauracion local tiene que sobrevivir a varios pasos de
+    -- simulacion despues de desactivar el impulso. Nunca continuar aplicando
+    -- fuerzas de Fling durante la recuperacion.
     if spin then pcall(function() spin:Destroy() end) end
-    for _, force in ipairs(root:GetChildren()) do
-        if force.Name == "XoniHubSpin" or force.Name == "TrollPanelSpin" then
-            pcall(function() force:Destroy() end)
+    for _, actuator in ipairs(root:GetChildren()) do
+        if actuator.Name == "XoniHubSpin" or actuator.Name == "TrollPanelSpin" then
+            pcall(function() actuator:Destroy() end)
         end
     end
 
-    local function stopLocalPhysics()
+    local function clearResidualMotion()
         if not char.Parent then return end
+        -- Anular las velocidades de las assemblies completas, no solo HRP.
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
-                part.AssemblyLinearVelocity = Vector3.zero
-                part.AssemblyAngularVelocity = Vector3.zero
+                pcall(function()
+                    part.AssemblyLinearVelocity = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                end)
             end
         end
     end
 
     local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
     if sameCharacter then
-        -- Congelar y vaciar la inercia ANTES de devolverlo al punto inicial.
+        -- Detener primero la simulacion local y recuperar la posicion de origen.
         root.Anchored = true
-        stopLocalPhysics()
+        clearResidualMotion()
         char:PivotTo(originalPivot)
-
-        -- Mantener el personaje estable mientras se consumen los pasos de
-        -- simulacion pendientes; 3 frames no bastaban en celular.
-        local stabilizeUntil = os.clock() + 0.55
-        while os.clock() < stabilizeUntil and me.Character == char and root.Parent do
+        for _ = 1, 9 do
+            if me.Character ~= char or not root.Parent or hum.Health <= 0 then break end
             RunService.Heartbeat:Wait()
-            stopLocalPhysics()
+            clearResidualMotion()
             char:PivotTo(originalPivot)
         end
     end
 
-    -- Restaurar colisiones y estados ANTES de soltar el anclaje, evitando
-    -- que otro paso de fisica herede velocidades de la etapa anterior.
+    -- Restaurar los ajustes que existian antes de iniciar la accion.
     UI.setFlingCollision(char, false, collisionSaved)
     if hum.Parent then
         hum.PlatformStand = originalPlatformStand
         hum.AutoRotate = originalAutoRotate
     end
     if root.Parent then
-        stopLocalPhysics()
+        clearResidualMotion()
         root.Anchored = originalAnchored
     end
 
-    -- Segunda etapa: comprobar fisica tras reactivar el movimiento.
-    -- Si el impulso extremo reaparece, neutralizarlo sin anclar el personaje.
+    -- V48 observaba solo 0.35 segundos tras soltar el HRP. En movil la
+    -- velocidad residual puede reaparecer despues. Verificar durante 1.6s,
+    -- corrigiendo solo impulsos anormales (no el movimiento cotidiano).
     if sameCharacter and not originalAnchored then
-        local verifyUntil = os.clock() + 0.35
-        while os.clock() < verifyUntil and me.Character == char and root.Parent do
+        local recoveryStart = os.clock()
+        local recoveryEnd = recoveryStart + 1.6
+        local stableCount = 0
+        while os.clock() < recoveryEnd and me.Character == char and root.Parent
+            and hum.Parent and hum.Health > 0 and not state.closing do
             RunService.Heartbeat:Wait()
-            local runaway = root.AssemblyLinearVelocity.Magnitude > 120
-                or root.AssemblyAngularVelocity.Magnitude > 120
+            local v = root.AssemblyLinearVelocity
+            local w = root.AssemblyAngularVelocity
+            local invalid = (v.X ~= v.X) or (v.Y ~= v.Y) or (v.Z ~= v.Z)
+            local runaway = invalid or v.Magnitude > 110 or w.Magnitude > 110
             if runaway then
-                stopLocalPhysics()
+                clearResidualMotion()
+                -- Reposicionar solo durante la recuperacion; se evita que
+                -- una fuerza antigua vuelva a sacarnos de la zona de regreso.
                 char:PivotTo(originalPivot)
+                stableCount = 0
+            else
+                stableCount += 1
+            end
+            -- Si ya esta estable durante 0.5s y pasaron 0.7s,
+            -- dejar de intervenir para devolver completamente los controles.
+            if stableCount > 30 and os.clock() - recoveryStart > 0.7 then
+                break
             end
         end
+        clearResidualMotion()
     end
     if hum.Parent and hum.Health > 0 and not originalPlatformStand then
         pcall(function()
