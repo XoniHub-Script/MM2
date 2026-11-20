@@ -1,4 +1,4 @@
--- XONI HUB V46 | Alineacion HRP y colisiones temporales en PC/movil
+-- XONI HUB V47 | Restauracion de posicion y fisica tras Fling
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
 -- Detecta Knife o Gun dentro de Character y Backpack cuando son visibles al cliente.
@@ -2283,6 +2283,7 @@ function UI.executeFlingSingle(targetPlayer)
     state.busy = true
     UI.suspendFarm()
     local originalCFrame = root.CFrame
+    local originalPivot = char:GetPivot()
     local originalAnchored = root.Anchored
     local originalAutoRotate = hum.AutoRotate
     local originalPlatformStand = hum.PlatformStand
@@ -2315,21 +2316,43 @@ function UI.executeFlingSingle(targetPlayer)
             RunService.Heartbeat:Wait()
         end
     end)
-    -- Limpieza siempre, incluso si ocurre un error durante el movimiento.
+    -- Restauracion segura: la fuerza extrema deja velocidades en TODAS las partes,
+    -- no solo en HumanoidRootPart. Detener esas velocidades antes de reubicar.
     if spin and spin.Parent then spin:Destroy() end
-    UI.setFlingCollision(char, false, collisionSaved)
-    for _ = 1, 8 do
-        if root.Parent then
-            root.CFrame = originalCFrame
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
+    local function stopLocalPhysics()
+        if not char.Parent then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end
         end
-        RunService.Heartbeat:Wait()
     end
-    if root.Parent then root.Anchored = originalAnchored end
+    local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
+    if sameCharacter then
+        -- Anclar momentaneamente impide que la inercia lo lance de nuevo
+        -- mientras se recuperan el pivote y las colisiones.
+        root.Anchored = true
+        stopLocalPhysics()
+        char:PivotTo(originalPivot)
+        for _ = 1, 3 do
+            RunService.Heartbeat:Wait()
+            if me.Character ~= char or not root.Parent then break end
+            stopLocalPhysics()
+            char:PivotTo(originalPivot)
+        end
+    end
+    UI.setFlingCollision(char, false, collisionSaved)
+    if root.Parent then
+        stopLocalPhysics()
+        root.Anchored = originalAnchored
+    end
     if hum.Parent then
         hum.PlatformStand = originalPlatformStand
         hum.AutoRotate = originalAutoRotate
+        if hum.Health > 0 and not originalPlatformStand then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
     end
     pcall(function() workspace.FallenPartsDestroyHeight = oldHeight end)
     UI.restoreFlingAnimations(char, hum, animate, animateWasDisabled)
