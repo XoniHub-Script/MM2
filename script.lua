@@ -2316,9 +2316,8 @@ function UI.executeFlingSingle(targetPlayer)
             RunService.Heartbeat:Wait()
         end
     end)
-    -- V49: la restauracion local tiene que sobrevivir a varios pasos de
-    -- simulacion despues de desactivar el impulso. Nunca continuar aplicando
-    -- fuerzas de Fling durante la recuperacion.
+    -- V50: Recuperacion de TODO el rig. Anclar solo el HRP deja otras
+    -- assemblies/partes con inercia y pueden volver a lanzar el personaje.
     if spin then pcall(function() spin:Destroy() end) end
     for _, actuator in ipairs(root:GetChildren()) do
         if actuator.Name == "XoniHubSpin" or actuator.Name == "TrollPanelSpin" then
@@ -2326,11 +2325,26 @@ function UI.executeFlingSingle(targetPlayer)
         end
     end
 
-    local function clearResidualMotion()
-        if not char.Parent then return end
-        -- Anular las velocidades de las assemblies completas, no solo HRP.
+    local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
+    local anchorSaved = {}
+    -- Registrar TODAS las BasePart, incluidas partes de accesorios y HRP.
+    -- Sus CanCollide originales ya estan en collisionSaved.
+    local function freezeEntireCharacter()
+        if not sameCharacter or me.Character ~= char or not char.Parent then return end
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
+            if part:IsA("BasePart") and part.Parent then
+                if anchorSaved[part] == nil then anchorSaved[part] = part.Anchored end
+                part.CanCollide = false
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+                part.Anchored = true
+            end
+        end
+    end
+    local function zeroEntireCharacter()
+        if me.Character ~= char or not char.Parent then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.Parent then
                 pcall(function()
                     part.AssemblyLinearVelocity = Vector3.zero
                     part.AssemblyAngularVelocity = Vector3.zero
@@ -2338,63 +2352,66 @@ function UI.executeFlingSingle(targetPlayer)
             end
         end
     end
+    local function releaseEntireCharacter()
+        -- Restaurar anclajes ANTES de las colisiones para no provocar
+        -- una sacudida mientras alguna parte sigue inmovilizada.
+        for part, anchoredBefore in pairs(anchorSaved) do
+            if part.Parent then
+                pcall(function() part.Anchored = anchoredBefore end)
+            end
+        end
+        if root.Parent then root.Anchored = originalAnchored end
+        table.clear(anchorSaved)
+    end
+    local function normalizeVelocity()
+        local v, w = root.AssemblyLinearVelocity, root.AssemblyAngularVelocity
+        local function bad(n) return n ~= n or math.abs(n) > 100000 end
+        return bad(v.X) or bad(v.Y) or bad(v.Z) or bad(w.X)
+            or bad(w.Y) or bad(w.Z) or v.Magnitude > 100 or w.Magnitude > 100
+    end
 
-    local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
     if sameCharacter then
-        -- Detener primero la simulacion local y recuperar la posicion de origen.
-        root.Anchored = true
-        clearResidualMotion()
-        char:PivotTo(originalPivot)
-        for _ = 1, 9 do
+        -- Durante el retorno: todas las partes ancladas + sin colision.
+        freezeEntireCharacter()
+        pcall(function() char:PivotTo(originalPivot) end)
+        -- Mantener 0.3 segundos para que la simulacion pierda la inercia.
+        for _ = 1, 18 do
             if me.Character ~= char or not root.Parent or hum.Health <= 0 then break end
             RunService.Heartbeat:Wait()
-            clearResidualMotion()
-            char:PivotTo(originalPivot)
+            freezeEntireCharacter()
+            zeroEntireCharacter()
+            pcall(function() char:PivotTo(originalPivot) end)
         end
     end
 
-    -- Restaurar los ajustes que existian antes de iniciar la accion.
-    UI.setFlingCollision(char, false, collisionSaved)
     if hum.Parent then
         hum.PlatformStand = originalPlatformStand
         hum.AutoRotate = originalAutoRotate
     end
-    if root.Parent then
-        clearResidualMotion()
-        root.Anchored = originalAnchored
-    end
-
-    -- V48 observaba solo 0.35 segundos tras soltar el HRP. En movil la
-    -- velocidad residual puede reaparecer despues. Verificar durante 1.6s,
-    -- corrigiendo solo impulsos anormales (no el movimiento cotidiano).
+    zeroEntireCharacter()
+    releaseEntireCharacter()
+    -- Los motores recuperan la fisica ANTES de reactivar colisiones.
+    -- Una fuerza residual puede aparecer varios frames despues en movil.
     if sameCharacter and not originalAnchored then
-        local recoveryStart = os.clock()
-        local recoveryEnd = recoveryStart + 1.6
-        local stableCount = 0
-        while os.clock() < recoveryEnd and me.Character == char and root.Parent
+        local endTime = os.clock() + 2.1
+        while os.clock() < endTime and me.Character == char and root.Parent
             and hum.Parent and hum.Health > 0 and not state.closing do
             RunService.Heartbeat:Wait()
-            local v = root.AssemblyLinearVelocity
-            local w = root.AssemblyAngularVelocity
-            local invalid = (v.X ~= v.X) or (v.Y ~= v.Y) or (v.Z ~= v.Z)
-            local runaway = invalid or v.Magnitude > 110 or w.Magnitude > 110
-            if runaway then
-                clearResidualMotion()
-                -- Reposicionar solo durante la recuperacion; se evita que
-                -- una fuerza antigua vuelva a sacarnos de la zona de regreso.
-                char:PivotTo(originalPivot)
-                stableCount = 0
-            else
-                stableCount += 1
-            end
-            -- Si ya esta estable durante 0.5s y pasaron 0.7s,
-            -- dejar de intervenir para devolver completamente los controles.
-            if stableCount > 30 and os.clock() - recoveryStart > 0.7 then
-                break
+            if normalizeVelocity() then
+                -- Reanclar de forma breve el rig completo, no solamente HRP.
+                freezeEntireCharacter()
+                zeroEntireCharacter()
+                pcall(function() char:PivotTo(originalPivot) end)
+                RunService.Heartbeat:Wait()
+                zeroEntireCharacter()
+                releaseEntireCharacter()
             end
         end
-        clearResidualMotion()
     end
+    zeroEntireCharacter()
+    releaseEntireCharacter()
+    -- Respetar Noclip previo; ninguna parte debe quedar anclada por V50.
+    UI.setFlingCollision(char, false, collisionSaved)
     if hum.Parent and hum.Health > 0 and not originalPlatformStand then
         pcall(function()
             hum:ChangeState(hum.FloorMaterial == Enum.Material.Air
