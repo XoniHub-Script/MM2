@@ -2176,7 +2176,7 @@ function UI.runCombat(mode, chosenTarget)
     if #targets > 0 then notify("Acción finalizada", "Se completó el recorrido de objetivos", C.mint) end
 end
 
--- FLING sobre el jugador seleccionado. Recuperacion libre de congelamiento.
+-- V55: detener Fling apenas el objetivo ya fue lanzado; regreso único.
 -- Advertencia: la simulación física puede ser filtrada por la propiedad de red/servidor.
 local flingBusy = false
 
@@ -2312,12 +2312,30 @@ function UI.executeFlingSingle(targetPlayer)
         spin.AngularVelocity = Vector3.new(0, 9e20, 0)
         spin.Parent = root
         local started = os.clock()
-        local duration = 2
+        local duration = 2 -- limite de seguridad si nunca se confirma el lanzamiento
+        local initialTargetPosition = UI.getTargetRoot(targetPlayer).Position
+        local launchConfirmed = false
+        local launchFrames = 0
         while os.clock() - started < duration and not state.closing do
             local targetRoot = UI.getTargetRoot(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
-            -- Mismo metodo en PC y celular; evita el desfase del pivote.
-            -- El servidor aun puede corregir posiciones por su propia fisica.
+
+            -- No repetir Fling una vez que el objetivo ya salio despedido.
+            -- Comprobar el movimiento DEL OBJETIVO, no el de nuestro personaje.
+            -- Dos lecturas consecutivas reducen falsos positivos por el lag.
+            local elapsed = os.clock() - started
+            local targetVelocity = targetRoot.AssemblyLinearVelocity.Magnitude
+            local targetDisplacement = (targetRoot.Position - initialTargetPosition).Magnitude
+            local launched = elapsed > 0.12 and (
+                targetVelocity > 95 or
+                (targetDisplacement > 16 and targetVelocity > 45)
+            )
+            launchFrames = launched and (launchFrames + 1) or 0
+            if launchFrames >= 2 then
+                launchConfirmed = true
+                break -- ninguna otra rotacion, posicion o impulso
+            end
+
             local aligned = UI.alignFlingCharacter(char, root, targetRoot, pivotOffsetAtStart)
             measuredFrames += 1
             if aligned then alignedFrames += 1 end
@@ -2326,8 +2344,10 @@ function UI.executeFlingSingle(targetPlayer)
             root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
         end
+        -- El bucle termino: el bloque de limpieza que sigue es el unico
+        -- encargado de regresar y restaurar animaciones/fisica.
     end)
-    -- V54: regreso sin congelar el personaje durante varios segundos.
+    -- V55: retorno inmediato al finalizar, sin seguir ejecutando el bucle.
     -- Las versiones anteriores mantenian todas las partes Anchored y
     -- reactivaban Freefall, lo que producia rigidez y caidas al regresar.
     if spin then pcall(function() spin:Destroy() end) end
