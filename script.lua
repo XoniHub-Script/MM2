@@ -1,3 +1,4 @@
+-- XONI HUB V53 - Alineacion de HRP comprobada / offset de pivote fijo
 -- XONI HUB V51 | Evita autoimpulso del personaje en dispositivos tactiles
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
@@ -2092,7 +2093,7 @@ function UI.attackTarget(p, maxDuration)
     local started = os.clock()
     while os.clock() - started < maxDuration and not state.closing do
         -- El objetivo puede cambiar de rol durante la ronda: no seguir a otro Murder.
-        if UI.getRole(p) == "Murder" or UI.getRole(me) ~= "Murder" then return false end
+        if state.blacklist[p.UserId] or UI.getRole(p) == "Murder" or UI.getRole(me) ~= "Murder" then return false end
         local root, hum = UI.getTargetRoot(p)
         if not root or hum.Health <= 0 then return true end
         if knife.Parent ~= me.Character then return false end
@@ -2175,7 +2176,7 @@ function UI.runCombat(mode, chosenTarget)
     if #targets > 0 then notify("Acción finalizada", "Se completó el recorrido de objetivos", C.mint) end
 end
 
--- FLING sobre el jugador seleccionado. Restaurar siempre la física y posición.
+-- FLING sobre el jugador seleccionado. Recuperacion libre de congelamiento.
 -- Advertencia: la simulación física puede ser filtrada por la propiedad de red/servidor.
 local flingBusy = false
 
@@ -2241,12 +2242,15 @@ end
 
 -- Alinea el HRP local con el HRP objetivo usando un unico calculo
 -- compatible con PC y dispositivos tactiles.
-function UI.alignFlingCharacter(character, root, targetRoot)
+function UI.alignFlingCharacter(character, root, targetRoot, pivotOffset)
     if not (character and root and targetRoot) then return false end
     if not (character.Parent and root.Parent and targetRoot.Parent) then return false end
-    local pivotOffset = root.CFrame:ToObjectSpace(character:GetPivot())
-    character:PivotTo(targetRoot.CFrame * pivotOffset)
-    return true
+    -- Mantener el mismo offset de pivote durante TODA la accion.
+    -- Calcularlo otra vez mientras el rig gira puede desplazar la alineacion.
+    local offset = pivotOffset or root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(targetRoot.CFrame * offset)
+    -- Verificar la posicion real del HRP, no solo la posicion solicitada del modelo.
+    return (root.Position - targetRoot.Position).Magnitude <= 2
 end
 
 -- Las colisiones propias pueden empujar al personaje hacia un lado.
@@ -2284,6 +2288,9 @@ function UI.executeFlingSingle(targetPlayer)
     UI.suspendFarm()
     local originalCFrame = root.CFrame
     local originalPivot = char:GetPivot()
+    local pivotOffsetAtStart = root.CFrame:ToObjectSpace(originalPivot)
+    local alignedFrames = 0
+    local measuredFrames = 0
     local originalAnchored = root.Anchored
     local originalAutoRotate = hum.AutoRotate
     local originalPlatformStand = hum.PlatformStand
@@ -2311,15 +2318,18 @@ function UI.executeFlingSingle(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
             -- Mismo metodo en PC y celular; evita el desfase del pivote.
             -- El servidor aun puede corregir posiciones por su propia fisica.
-            if not UI.alignFlingCharacter(char, root, targetRoot) then break end
+            local aligned = UI.alignFlingCharacter(char, root, targetRoot, pivotOffsetAtStart)
+            measuredFrames += 1
+            if aligned then alignedFrames += 1 end
             UI.setFlingCollision(char, true, collisionSaved)
             root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
             root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
         end
     end)
-    -- V50: Recuperacion de TODO el rig. Anclar solo el HRP deja otras
-    -- assemblies/partes con inercia y pueden volver a lanzar el personaje.
+    -- V54: regreso sin congelar el personaje durante varios segundos.
+    -- Las versiones anteriores mantenian todas las partes Anchored y
+    -- reactivaban Freefall, lo que producia rigidez y caidas al regresar.
     if spin then pcall(function() spin:Destroy() end) end
     for _, actuator in ipairs(root:GetChildren()) do
         if actuator.Name == "XoniHubSpin" or actuator.Name == "TrollPanelSpin" then
@@ -2328,23 +2338,8 @@ function UI.executeFlingSingle(targetPlayer)
     end
 
     local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
-    local anchorSaved = {}
-    -- Registrar TODAS las BasePart, incluidas partes de accesorios y HRP.
-    -- Sus CanCollide originales ya estan en collisionSaved.
-    local function freezeEntireCharacter()
-        if not sameCharacter or me.Character ~= char or not char.Parent then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.Parent then
-                if anchorSaved[part] == nil then anchorSaved[part] = part.Anchored end
-                part.CanCollide = false
-                part.AssemblyLinearVelocity = Vector3.zero
-                part.AssemblyAngularVelocity = Vector3.zero
-                part.Anchored = true
-            end
-        end
-    end
-    local function zeroEntireCharacter()
-        if me.Character ~= char or not char.Parent then return end
+    local function clearResidualMotion()
+        if not sameCharacter or me.Character ~= char then return end
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.Parent then
                 pcall(function()
@@ -2354,79 +2349,38 @@ function UI.executeFlingSingle(targetPlayer)
             end
         end
     end
-    local function releaseEntireCharacter()
-        -- Restaurar anclajes ANTES de las colisiones para no provocar
-        -- una sacudida mientras alguna parte sigue inmovilizada.
-        for part, anchoredBefore in pairs(anchorSaved) do
-            if part.Parent then
-                pcall(function() part.Anchored = anchoredBefore end)
-            end
-        end
-        if root.Parent then root.Anchored = originalAnchored end
-        table.clear(anchorSaved)
-    end
-    local function normalizeVelocity()
-        local v, w = root.AssemblyLinearVelocity, root.AssemblyAngularVelocity
-        local function bad(n) return n ~= n or math.abs(n) > 100000 end
-        return bad(v.X) or bad(v.Y) or bad(v.Z) or bad(w.X)
-            or bad(w.Y) or bad(w.Z) or v.Magnitude > 100 or w.Magnitude > 100
-    end
 
-    if sameCharacter then
-        -- Durante el retorno: todas las partes ancladas + sin colision.
-        freezeEntireCharacter()
+    -- Se limpia la inercia ANTES de volver al punto guardado.
+    -- Nunca se anclan todas las partes ni se fuerza el estado Freefall.
+    if sameCharacter and hum.Health > 0 then
+        clearResidualMotion()
         pcall(function() char:PivotTo(originalPivot) end)
-        -- Mantener 0.3 segundos para que la simulacion pierda la inercia.
-        for _ = 1, 18 do
-            if me.Character ~= char or not root.Parent or hum.Health <= 0 then break end
-            RunService.Heartbeat:Wait()
-            freezeEntireCharacter()
-            zeroEntireCharacter()
-            pcall(function() char:PivotTo(originalPivot) end)
-        end
+        clearResidualMotion()
     end
-
     if hum.Parent then
         hum.PlatformStand = originalPlatformStand
         hum.AutoRotate = originalAutoRotate
-    end
-    zeroEntireCharacter()
-    releaseEntireCharacter()
-    -- Los motores recuperan la fisica ANTES de reactivar colisiones.
-    -- Una fuerza residual puede aparecer varios frames despues en movil.
-    if sameCharacter and not originalAnchored then
-        local endTime = os.clock() + 2.1
-        while os.clock() < endTime and me.Character == char and root.Parent
-            and hum.Parent and hum.Health > 0 and not state.closing do
-            RunService.Heartbeat:Wait()
-            if normalizeVelocity() then
-                -- Reanclar de forma breve el rig completo, no solamente HRP.
-                freezeEntireCharacter()
-                zeroEntireCharacter()
-                pcall(function() char:PivotTo(originalPivot) end)
-                RunService.Heartbeat:Wait()
-                zeroEntireCharacter()
-                releaseEntireCharacter()
-            end
+        if hum.Health > 0 and not originalPlatformStand then
+            pcall(function()
+                hum.Sit = false
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
         end
     end
-    zeroEntireCharacter()
-    releaseEntireCharacter()
-    -- Respetar Noclip previo; ninguna parte debe quedar anclada por V50.
+    if root.Parent then root.Anchored = originalAnchored end
     UI.setFlingCollision(char, false, collisionSaved)
-    if hum.Parent and hum.Health > 0 and not originalPlatformStand then
-        pcall(function()
-            hum:ChangeState(hum.FloorMaterial == Enum.Material.Air
-                and Enum.HumanoidStateType.Freefall
-                or Enum.HumanoidStateType.Running)
-        end)
-    end
+    -- La fisica vuelve a Roblox inmediatamente, sin bucles de anclaje
+    -- o teletransportes repetidos que dejen al personaje rigido.
     pcall(function() workspace.FallenPartsDestroyHeight = oldHeight end)
     UI.restoreFlingAnimations(char, hum, animate, animateWasDisabled)
     state.busy = false
     flingBusy = false
-    if not ok then warn("XONI HUB FLING: " .. tostring(err)) end
-    return ok
+    if not ok then
+        warn("XONI HUB FLING: " .. tostring(err))
+    elseif measuredFrames > 0 and alignedFrames == 0 then
+        notify("Fling", "Roblox no mantuvo la alineación del HRP; el panel no puede forzar la física del servidor", C.orange)
+    end
+    return ok and measuredFrames > 0 and alignedFrames > 0
 end
 
 -- Anti-AFK opt-in: simulación interna de entrada Roblox cuando el entorno lo permite.
@@ -2881,7 +2835,7 @@ function UI.updateAim(delta)
     local chosenPos=nil
     local chosenTarget=nil
     for _,p in ipairs(Players:GetPlayers()) do
-        if p~=me and UI.getRole(p)==desiredRole then
+        if p~=me and not state.blacklist[p.UserId] and UI.getRole(p)==desiredRole then
             local char=p.Character
             local human=char and char:FindFirstChildOfClass("Humanoid")
             local body=char and (char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart"))
