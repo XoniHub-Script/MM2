@@ -1,4 +1,4 @@
--- XONI HUB V49 | Recuperacion de movimiento local reforzada en PC y movil
+-- XONI HUB V51 | Evita autoimpulso del personaje en dispositivos tactiles
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
 -- Detecta Knife o Gun dentro de Character y Backpack cuando son visibles al cliente.
@@ -2290,6 +2290,10 @@ function UI.executeFlingSingle(targetPlayer)
     local oldHeight = workspace.FallenPartsDestroyHeight
     local animate, animateWasDisabled
     local spin
+    -- Las velocidades extremas de la version de PC lanzaban tambien al
+    -- personaje local en dispositivos tactiles. Esta ruta prioriza que
+    -- el jugador recupere el movimiento normal y no salga despedido.
+    local touchSafeMode = UIS.TouchEnabled
     local collisionSaved = {}
     local ok, err = pcall(function()
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
@@ -2297,22 +2301,32 @@ function UI.executeFlingSingle(targetPlayer)
         hum.AutoRotate = false
         animate, animateWasDisabled = UI.pauseFlingAnimations(char, hum)
         UI.setFlingCollision(char, true, collisionSaved)
-        spin = Instance.new("BodyAngularVelocity")
-        spin.Name = "XoniHubSpin"
-        spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        spin.P = math.huge
-        spin.AngularVelocity = Vector3.new(0, 9e20, 0)
-        spin.Parent = root
+        if not touchSafeMode then
+            spin = Instance.new("BodyAngularVelocity")
+            spin.Name = "XoniHubSpin"
+            spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+            spin.P = math.huge
+            spin.AngularVelocity = Vector3.new(0, 9e20, 0)
+            spin.Parent = root
+        end
         local started = os.clock()
-        while os.clock() - started < 2 and not state.closing do
+        -- En tactil solo se comprueba brevemente la alineacion. No se
+        -- mantiene la fuerza extrema de fling en el rig local.
+        local duration = touchSafeMode and 0.15 or 2
+        while os.clock() - started < duration and not state.closing do
             local targetRoot = UI.getTargetRoot(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
             -- Mismo metodo en PC y celular; evita el desfase del pivote.
             -- El servidor aun puede corregir posiciones por su propia fisica.
             if not UI.alignFlingCharacter(char, root, targetRoot) then break end
             UI.setFlingCollision(char, true, collisionSaved)
-            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-            root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
+            if touchSafeMode then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            else
+                root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
+                root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
+            end
             RunService.Heartbeat:Wait()
         end
     end)
@@ -2517,7 +2531,8 @@ connect(UI.flingButton.Activated,function()
     end
     task.spawn(function()
         local ok = UI.executeFlingSingle(target)
-        notify("Fling",ok and "Acción finalizada (resultado sujeto al servidor)" or "No se pudo ejecutar",ok and C.mint or C.orange)
+        local message = ok and (UIS.TouchEnabled and "Regreso seguro completado (sin fuerza extrema en móvil)" or "Acción finalizada (resultado sujeto al servidor)") or "No se pudo ejecutar"
+        notify("Fling", message, ok and C.mint or C.orange)
     end)
 end)
 connect(UI.gotoButton.MouseButton1Click,function()
