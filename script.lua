@@ -1,4 +1,4 @@
--- XONI HUB V47 | Restauracion de posicion y fisica tras Fling
+-- XONI HUB V48 | Retorno estable tras Fling en PC y movil
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
 -- Detecta Knife o Gun dentro de Character y Backpack cuando son visibles al cliente.
@@ -2316,9 +2316,16 @@ function UI.executeFlingSingle(targetPlayer)
             RunService.Heartbeat:Wait()
         end
     end)
-    -- Restauracion segura: la fuerza extrema deja velocidades en TODAS las partes,
-    -- no solo en HumanoidRootPart. Detener esas velocidades antes de reubicar.
-    if spin and spin.Parent then spin:Destroy() end
+    -- Recuperacion V48: el impulso puede reaparecer uno o varios Heartbeats
+    -- despues de restaurar el pivote (especialmente en dispositivos moviles).
+    -- Destruir primero TODOS los actuadores temporales de este Fling.
+    if spin then pcall(function() spin:Destroy() end) end
+    for _, force in ipairs(root:GetChildren()) do
+        if force.Name == "XoniHubSpin" or force.Name == "TrollPanelSpin" then
+            pcall(function() force:Destroy() end)
+        end
+    end
+
     local function stopLocalPhysics()
         if not char.Parent then return end
         for _, part in ipairs(char:GetDescendants()) do
@@ -2328,31 +2335,56 @@ function UI.executeFlingSingle(targetPlayer)
             end
         end
     end
+
     local sameCharacter = me.Character == char and char.Parent ~= nil and root.Parent ~= nil
     if sameCharacter then
-        -- Anclar momentaneamente impide que la inercia lo lance de nuevo
-        -- mientras se recuperan el pivote y las colisiones.
+        -- Congelar y vaciar la inercia ANTES de devolverlo al punto inicial.
         root.Anchored = true
         stopLocalPhysics()
         char:PivotTo(originalPivot)
-        for _ = 1, 3 do
+
+        -- Mantener el personaje estable mientras se consumen los pasos de
+        -- simulacion pendientes; 3 frames no bastaban en celular.
+        local stabilizeUntil = os.clock() + 0.55
+        while os.clock() < stabilizeUntil and me.Character == char and root.Parent do
             RunService.Heartbeat:Wait()
-            if me.Character ~= char or not root.Parent then break end
             stopLocalPhysics()
             char:PivotTo(originalPivot)
         end
     end
+
+    -- Restaurar colisiones y estados ANTES de soltar el anclaje, evitando
+    -- que otro paso de fisica herede velocidades de la etapa anterior.
     UI.setFlingCollision(char, false, collisionSaved)
+    if hum.Parent then
+        hum.PlatformStand = originalPlatformStand
+        hum.AutoRotate = originalAutoRotate
+    end
     if root.Parent then
         stopLocalPhysics()
         root.Anchored = originalAnchored
     end
-    if hum.Parent then
-        hum.PlatformStand = originalPlatformStand
-        hum.AutoRotate = originalAutoRotate
-        if hum.Health > 0 and not originalPlatformStand then
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+
+    -- Segunda etapa: comprobar fisica tras reactivar el movimiento.
+    -- Si el impulso extremo reaparece, neutralizarlo sin anclar el personaje.
+    if sameCharacter and not originalAnchored then
+        local verifyUntil = os.clock() + 0.35
+        while os.clock() < verifyUntil and me.Character == char and root.Parent do
+            RunService.Heartbeat:Wait()
+            local runaway = root.AssemblyLinearVelocity.Magnitude > 120
+                or root.AssemblyAngularVelocity.Magnitude > 120
+            if runaway then
+                stopLocalPhysics()
+                char:PivotTo(originalPivot)
+            end
         end
+    end
+    if hum.Parent and hum.Health > 0 and not originalPlatformStand then
+        pcall(function()
+            hum:ChangeState(hum.FloorMaterial == Enum.Material.Air
+                and Enum.HumanoidStateType.Freefall
+                or Enum.HumanoidStateType.Running)
+        end)
     end
     pcall(function() workspace.FallenPartsDestroyHeight = oldHeight end)
     UI.restoreFlingAnimations(char, hum, animate, animateWasDisabled)
