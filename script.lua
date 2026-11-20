@@ -3523,7 +3523,7 @@ for _,choice in ipairs(choices) do
         notify("Panel cargado","Dashboard listo",C.mint)
     end)
 end
-text(welcome,"XONI HUB  •  V32",10,C.muted,true,{
+text(welcome,"XONI HUB  •  V33",10,C.muted,true,{
     Position=UDim2.fromOffset(20,239),Size=UDim2.new(1,-40,0,20),
     TextXAlignment=Enum.TextXAlignment.Center,ZIndex=201
 })
