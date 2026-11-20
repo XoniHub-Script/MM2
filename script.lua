@@ -638,13 +638,20 @@ local function playerActionButton(parent, txt, x, width, color)
     return b
 end
 -- Los cuatro controles se ajustan al ancho disponible; sin superposiciones.
-new("UIGridLayout",UI.playerButtonRow,{
+UI.targetActionGrid=new("UIGridLayout",UI.playerButtonRow,{
     FillDirection=Enum.FillDirection.Horizontal,
     FillDirectionMaxCells=3,
     SortOrder=Enum.SortOrder.LayoutOrder,
     CellSize=UDim2.new(0.333,-5,0,30),
     CellPadding=UDim2.fromOffset(5,5)
 })
+-- Los botones del Target necesitan superficies tactiles mas grandes.
+-- Se ajusta tambien en telefonos que tengan un teclado conectado.
+if UIS.TouchEnabled then
+    UI.targetActionGrid.FillDirectionMaxCells=2
+    UI.targetActionGrid.CellSize=UDim2.new(.5,-5,0,42)
+    UI.playerButtonRow.Size=UDim2.new(1,-34,0,140)
+end
 UI.targetExecute=playerActionButton(UI.playerButtonRow,"KILL TARGET",0,70,C.red)
 UI.blacklistToggle=playerActionButton(UI.playerButtonRow,"BLACKLIST",0,65,C.blue)
 UI.gotoButton=playerActionButton(UI.playerButtonRow,"GOTO",0,45,C.navy)
@@ -654,6 +661,8 @@ for index,button in ipairs({UI.targetExecute,UI.blacklistToggle,UI.gotoButton,UI
     button.LayoutOrder=index
     button.Position=UDim2.fromOffset(0,0)
     button.Size=UDim2.fromOffset(60,30)
+    button.Active=true
+    button.Selectable=true
     button.TextScaled=true
     new("UITextSizeConstraint",button,{MinTextSize=8,MaxTextSize=10})
 end
@@ -663,7 +672,7 @@ local function redrawPlayerList()
     UI.playerList.Visible=not collapsed
     UI.playerSelected.Visible=not collapsed
     UI.playerButtonRow.Visible=not collapsed
-    UI.playerManageCard.Size=UDim2.new(1,0,0,collapsed and 82 or 310)
+    UI.playerManageCard.Size=UDim2.new(1,0,0,collapsed and 82 or (UIS.TouchEnabled and 372 or 310))
 end
 connect(UI.playerToggle.MouseButton1Click,function() config.targetCollapsed=not config.targetCollapsed; redrawPlayerList(); playSound(clickSound) end)
 redrawPlayerList()
@@ -2351,9 +2360,12 @@ connect(UI.blacklistToggle.MouseButton1Click,function()
     UI.playerSelected.Text="Seleccionado: "..target.DisplayName.."  @"..target.Name..(state.blacklist[target.UserId] and "  •  EN BLACKLIST" or "")
     refreshPlayerList()
 end)
-connect(UI.flingButton.MouseButton1Click,function()
+-- Activated funciona tanto al tocar en celular como al hacer clic con mouse.
+-- Un unico evento evita que una pulsacion tactil ejecute dos veces la accion.
+connect(UI.flingButton.Activated,function()
+    playSound(clickSound)
     if not state.targetUserId then
-        notify("Fling","Seleccioná primero un jugador",C.orange)
+        notify("Fling","Seleccioná primero un jugador en Target",C.orange)
         return
     end
     local target = Players:GetPlayerByUserId(state.targetUserId)
@@ -2361,9 +2373,13 @@ connect(UI.flingButton.MouseButton1Click,function()
         notify("Fling","Jugador no disponible o en blacklist",C.orange)
         return
     end
+    if flingBusy or state.busy then
+        notify("Fling","Ya hay otra accion en curso",C.orange)
+        return
+    end
     task.spawn(function()
         local ok = UI.executeFlingSingle(target)
-        notify("Fling",ok and "Acción terminada" or "No se pudo ejecutar",ok and C.mint or C.orange)
+        notify("Fling",ok and "Acción finalizada (resultado sujeto al servidor)" or "No se pudo ejecutar",ok and C.mint or C.orange)
     end)
 end)
 connect(UI.gotoButton.MouseButton1Click,function()
@@ -3514,4 +3530,3 @@ text(welcome,"XONI HUB  •  V32",10,C.muted,true,{
 
 
 end -- XONI HUB localization / welcome local scope
-
