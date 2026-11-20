@@ -1,4 +1,4 @@
--- XONI HUB V39 | Target, Aimbot pantalla completa, Server, tema Blanco y Negro
+-- XONI HUB V46 | Alineacion HRP y colisiones temporales en PC/movil
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
 -- Colocar en StarterPlayer > StarterPlayerScripts dentro de TU experiencia.
 -- Detecta Knife o Gun dentro de Character y Backpack cuando son visibles al cliente.
@@ -1615,28 +1615,6 @@ function UI.getStableEspRole(p)
     previous.role="Player"
     return detected
 end
--- Los mapas pueden usar una Part llamada Lobby o LobbyZone.
--- El filtro por volumen funciona también si el personaje NO es descendiente del modelo.
-function UI.isInLobby(p)
-    local char=p.Character
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return false end
-    local lobby=workspace:FindFirstChild("LobbyZone",true) or workspace:FindFirstChild("Lobby",true)
-    if not lobby then return false end
-    if char:IsDescendantOf(lobby) then return true end
-    local cf,size
-    if lobby:IsA("BasePart") then
-        cf,size=lobby.CFrame,lobby.Size
-    elseif lobby:IsA("Model") then
-        cf,size=lobby:GetBoundingBox()
-    else
-        return false
-    end
-    local point=cf:PointToObjectSpace(root.Position)
-    local half=size*0.5
-    return math.abs(point.X)<=half.X and math.abs(point.Z)<=half.Z
-        and math.abs(point.Y)<=math.max(half.Y,12)
-end
 function UI.ensureVisual(p, role)
     local char = p.Character
     local human = char and char:FindFirstChildOfClass("Humanoid")
@@ -1684,7 +1662,7 @@ function UI.refreshEsp()
         local role = UI.getStableEspRole(p)
         local show = (role == "Murder" and state.murder) or (role == "Sheriff" and state.sheriff)
             or (role == "Player" and state.innocents and p ~= me)
-        if show and not UI.isInLobby(p) then
+        if show then
             UI.ensureVisual(p, role)
         else
             UI.cleanVisual(p)
@@ -2261,6 +2239,37 @@ function UI.restoreFlingAnimations(character, humanoid, animate, oldDisabled)
     end
 end
 
+-- Alinea el HRP local con el HRP objetivo usando un unico calculo
+-- compatible con PC y dispositivos tactiles.
+function UI.alignFlingCharacter(character, root, targetRoot)
+    if not (character and root and targetRoot) then return false end
+    if not (character.Parent and root.Parent and targetRoot.Parent) then return false end
+    local pivotOffset = root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(targetRoot.CFrame * pivotOffset)
+    return true
+end
+
+-- Las colisiones propias pueden empujar al personaje hacia un lado.
+-- Recordamos los valores originales para restaurarlos al acabar.
+function UI.setFlingCollision(character, active, saved)
+    if active then
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if saved[part] == nil then saved[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+    else
+        for part, value in pairs(saved) do
+            if part.Parent then
+                -- Si Noclip sigue activo, respetar esa opcion.
+                part.CanCollide = state.noclip and false or value
+            end
+            saved[part] = nil
+        end
+    end
+end
+
 function UI.executeFlingSingle(targetPlayer)
     if flingBusy or state.busy then return false end
     if not targetPlayer or targetPlayer == me or state.blacklist[targetPlayer.UserId] then return false end
@@ -2280,11 +2289,13 @@ function UI.executeFlingSingle(targetPlayer)
     local oldHeight = workspace.FallenPartsDestroyHeight
     local animate, animateWasDisabled
     local spin
+    local collisionSaved = {}
     local ok, err = pcall(function()
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
         root.Anchored = false
         hum.AutoRotate = false
         animate, animateWasDisabled = UI.pauseFlingAnimations(char, hum)
+        UI.setFlingCollision(char, true, collisionSaved)
         spin = Instance.new("BodyAngularVelocity")
         spin.Name = "XoniHubSpin"
         spin.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
@@ -2295,16 +2306,10 @@ function UI.executeFlingSingle(targetPlayer)
         while os.clock() - started < 2 and not state.closing do
             local targetRoot = UI.getTargetRoot(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
-            -- Movimiento original V23: HRP centrado y misma orientacion,
-            -- sin los giros ni inclinaciones extra de la V24.
-            -- Una sola ruta para PC, tablet y celular: usar PivotTo
-            -- alineando el HRP con el HRP del objetivo.
-            -- Las restricciones de fisica/red del servidor siguen vigentes.
-            -- PivotTo mueve el modelo completo. Conservamos la diferencia
-            -- espacial entre el pivot del personaje y su HRP: de ese modo
-            -- el HRP, no el centro visual del modelo, coincide con el objetivo.
-            local relativePivot = root.CFrame:ToObjectSpace(char:GetPivot())
-            char:PivotTo(targetRoot.CFrame * relativePivot)
+            -- Mismo metodo en PC y celular; evita el desfase del pivote.
+            -- El servidor aun puede corregir posiciones por su propia fisica.
+            if not UI.alignFlingCharacter(char, root, targetRoot) then break end
+            UI.setFlingCollision(char, true, collisionSaved)
             root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
             root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
@@ -2312,6 +2317,7 @@ function UI.executeFlingSingle(targetPlayer)
     end)
     -- Limpieza siempre, incluso si ocurre un error durante el movimiento.
     if spin and spin.Parent then spin:Destroy() end
+    UI.setFlingCollision(char, false, collisionSaved)
     for _ = 1, 8 do
         if root.Parent then
             root.CFrame = originalCFrame
