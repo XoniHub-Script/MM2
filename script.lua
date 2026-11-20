@@ -2280,8 +2280,6 @@ function UI.executeFlingSingle(targetPlayer)
     local oldHeight = workspace.FallenPartsDestroyHeight
     local animate, animateWasDisabled
     local spin
-    local mobileMode = UIS.TouchEnabled and not UIS.KeyboardEnabled
-    local movedOnMobile = false
     local ok, err = pcall(function()
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
         root.Anchored = false
@@ -2299,22 +2297,13 @@ function UI.executeFlingSingle(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
             -- Movimiento original V23: HRP centrado y misma orientacion,
             -- sin los giros ni inclinaciones extra de la V24.
-            if mobileMode then
-                -- En tactil el Character puede volver a su posicion anterior
-                -- si se actualiza solo el CFrame del HRP.
-                char:PivotTo(targetRoot.CFrame)
-                -- Evitar magnitudes no representables durante la correccion del rig.
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            else
-                root.CFrame = targetRoot.CFrame
-                root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-                root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
-            end
+            -- Una sola ruta para PC, tablet y celular: aplicar la misma
+            -- transformacion al HumanoidRootPart, sin PivotTo tactil.
+            -- Las restricciones de fisica/red del servidor siguen vigentes.
+            root.CFrame = targetRoot.CFrame
+            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
+            root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
-            if mobileMode and root.Parent and (root.Position-targetRoot.Position).Magnitude<=12 then
-                movedOnMobile=true
-            end
         end
     end)
     -- Limpieza siempre, incluso si ocurre un error durante el movimiento.
@@ -2337,10 +2326,6 @@ function UI.executeFlingSingle(targetPlayer)
     state.busy = false
     flingBusy = false
     if not ok then warn("XONI HUB FLING: " .. tostring(err)) end
-    if mobileMode and ok and not movedOnMobile then
-        notify("Fling", "El movimiento fue bloqueado o revertido. Puede requerir control del servidor.", C.orange)
-        return false
-    end
     return ok
 end
 
