@@ -1,3 +1,5 @@
+-- XONI HUB V74 | COIN COLLECTOR 90 GRADOS PERSISTENTE / SIN NOCLIP
+-- XONI HUB V68 | Contacto normal breve al llegar a cada coin; pose horizontal solo en trayecto
 -- XONI HUB V61 - KNIFENO proyectiles predictivos + AUTOSHOT Gun inventario
 -- XONI HUB V53 - Alineacion de HRP comprobada / offset de pivote fijo
 -- XONI HUB V51 | Evita autoimpulso del personaje en dispositivos tactiles
@@ -52,8 +54,8 @@ local C = {
 
 }
 
-local config = { rainbowLauncher = true, targetCollapsed = false, maxCoinDistance = 6000, coinSpeed = 40, notify = true, sounds = true, maxKillDistance = 5000, auraRadius = 25, toastDuration = 4.3, scale = 1, theme = "Rojo", animations = true, playerSpeed = 20, flySpeed = 36, aimFov = 185, aimSmooth = 40, aimWallcheck = false, aimbot = false, autoSave = true, panelTransparency = 0, hotkeys = {}, onScreen = {} }
-local state = { antiAfk = false, autoKillAll = false, killAura = false, autoShot = false, knifeNo = false, targetUserId = nil, blacklist = {}, farm = false, murder = false, sheriff = false, autoGun = false, gunEsp = false, innocents = false, noclip = false, infiniteJump = false, fastMove = false, flying = false, busy = false, aim = false, open = true, min = false, closing = false }
+local config = { rainbowLauncher = true, targetCollapsed = false, maxCoinDistance = 700, coinSpeed = 35, notify = true, sounds = true, maxKillDistance = 5000, auraRadius = 25, toastDuration = 4.3, scale = 1, theme = "Rojo", animations = true, playerSpeed = 20, flySpeed = 36, aimFov = 185, aimSmooth = 40, aimWallcheck = false, aimbot = false, autoSave = true, panelTransparency = 0, hotkeys = {}, onScreen = {} }
+local state = { antiAfk = false, autoKillAll = false, autoKillMurder = false, killAura = false, autoShot = false, knifeNo = false, targetUserId = nil, blacklist = {}, farm = false, murder = false, sheriff = false, autoGun = false, gunEsp = false, innocents = false, noclip = false, infiniteJump = false, fastMove = false, flying = false, busy = false, aim = false, open = true, min = false, closing = false }
 local runningTween = nil
 local visited = {}
 local savedParts = nil
@@ -72,10 +74,10 @@ local murderAlertCooldown = 0
 local idleEscapeCooldown = 0
 local retreatState = nil
 local RETREAT_POINT = Vector3.new(14.51, 519.56, 15.49) -- Refugio del lobby, sin altura artificial
-local DANGER_RADIUS = 40
-local RETURN_RADIUS = 55
+local DANGER_RADIUS = 40 -- Escape inmediato al detectar Murder a menos de 40 studs
+local RETURN_RADIUS = 52 -- Regresar cuando el Murder esté a 52 studs o más
 local RETREAT_TIMEOUT = 3
-local SAFE_COIN_RADIUS = 75
+local SAFE_COIN_RADIUS = 110
 local returnFromRetreat -- definida después de los helpers de movimiento
 local controlsDisabled = false
 local noclipOriginal = {} -- declarado antes de AutoCatchGun
@@ -593,7 +595,7 @@ UI.statusOptions = infoCard(homePage, "Funciones activas", "0 / 5", "Coin Collec
 
 pageTitle(eventPage, "Eventos", "Acciones disponibles para los caramelos.")
 local setFarm
-setFarm = option(eventPage, "Coin Collector", "Recolecta caramelos, recupera tu movimiento normal y continúa con el siguiente.", C.mint, function(v)
+setFarm = option(eventPage, "Coin Collector", "Recolecta coins de pie, sin animación de salto; espera en un punto fijo cuando no aparecen monedas.", C.mint, function(v)
     if v and #Players:GetPlayers() <= 3 then
         state.farm = false
         task.defer(function()
@@ -603,6 +605,22 @@ setFarm = option(eventPage, "Coin Collector", "Recolecta caramelos, recupera tu 
         return
     end
     state.farm = v
+    if v then
+        -- Reinicio limpio: un recorrido anterior no debe mantener el anclaje,
+        -- la lista de monedas visitadas ni una espera cancelada.
+        UI.coinStandby = false
+        UI.coinStandbyOrigin = nil
+        UI.coinSearchOrigin = (me.Character and me.Character:FindFirstChild("HumanoidRootPart") and me.Character.HumanoidRootPart.Position) or nil
+        visited = {}
+        -- Al volver a activar, revisar bolsa llena previamente detectada o mostrada en GUI.
+        task.defer(function()
+            if state.farm and UI.checkFullBag then UI.checkFullBag() end
+        end)
+    else
+        UI.coinStandby = false
+        UI.coinStandbyOrigin = nil
+        UI.coinSearchOrigin = nil
+    end
     if not v then
         -- Guardar la posición ANTES de borrar el estado de escape.
         if returnFromRetreat then returnFromRetreat() end
@@ -611,6 +629,7 @@ setFarm = option(eventPage, "Coin Collector", "Recolecta caramelos, recupera tu 
         retreatState=nil
     end
     setFarmInputLocked(v)
+    if not v and UI.restoreFarmCharacter then UI.restoreFarmCharacter() end
 end)
 UI.coinStatus = card(eventPage, 65)
 UI.coinStatusText = text(UI.coinStatus, "Estado: esperando activación", 12, C.ink, true, {Position = UDim2.fromOffset(18, 12), Size = UDim2.new(1, -36, 0, 41), TextWrapped = true})
@@ -683,6 +702,19 @@ end)
 -- Esquiva local de proyectiles TrailPart, si el terreno permite desplazarse.
 UI.setKnifeNo = option(opPage, "KnifeNo", "Predice cuchillos TrailPart y esquiva sus trayectorias cuando existe un camino libre.", C.mint, function(v)
     state.knifeNo=v
+end)
+-- V84: el interruptor conserva la preferencia aunque todavía no sea Sheriff.
+-- El ciclo se iniciará automáticamente apenas el rol propio pase a Sheriff.
+local killMurderButton = actionOption(opPage, "Kill Murder", "EJECUTAR: un solo recorrido contra el Murder detectado, si sos Sheriff.", C.sheriff, function()
+    if UI.runKillMurderOnce then UI.runKillMurderOnce() end
+end)
+UI.setAutoKillMurder = option(opPage, "Auto Kill Murder", "ON/OFF: queda preparado aunque todavía no seas Sheriff. Al tocarte Sheriff, sigue al Murder automáticamente hasta desactivarlo.", C.sheriff, function(v)
+    state.autoKillMurder = v
+    if v and UI.getRole and UI.getRole(me) ~= "Sheriff" then
+        task.defer(function()
+            notify("Auto Kill Murder", "Activado: esperando a que seas Sheriff", C.orange)
+        end)
+    end
 end)
 UI.setAutoKillAll = option(opPage, "Auto Kill All", "Cuando tu rol sea Murder, prioriza Sheriff y ejecuta Kill All automáticamente. Pausa Coin Collector mientras actúa.", C.red, function(v)
     state.autoKillAll = v
@@ -989,6 +1021,57 @@ UI.setAntiAfk = option(opPage, "Anti-AFK", "Intenta enviar una entrada virtual a
     state.antiAfk = v
 end)
 
+-- V86: OP organizado mediante FRAMES independientes (sin listas plegables).
+-- Reutiliza las tarjetas existentes: no duplica callbacks, keybinds ni switches.
+do
+    local definitions = {
+        {title="ESP / VISUALES", accent=C.red, names={"ESP Murder","ESP Sheriff","ESP Players","ESP Gun"}},
+        {title="MURDER", accent=C.red, names={"Kill Sheriff","Kill All","KILL AURA","Radio Kill Aura","Auto Kill All"}},
+        {title="SHERIFF / KILL MURDER", accent=C.sheriff, names={"AutoShot","KnifeNo","Kill Murder","Auto Kill Murder"}},
+        {title="OTRAS HERRAMIENTAS", accent=C.mint, names={"AutoCatchGun","Anti-AFK"}},
+    }
+    for idx, definition in ipairs(definitions) do
+        local shell = new("Frame", opPage, {
+            Name="OpSection"..idx, LayoutOrder=idx*10, Size=UDim2.new(1,0,0,68),
+            BackgroundColor3=C.dark, BorderSizePixel=0, ClipsDescendants=false
+        })
+        round(shell,7)
+        local outline=line(shell,C.line,.22)
+        outline.Thickness=1
+        new("Frame",shell,{
+            Name="SectionAccent",Position=UDim2.fromOffset(9,11),
+            Size=UDim2.fromOffset(3,16),BackgroundColor3=definition.accent,BorderSizePixel=0
+        })
+        text(shell,definition.title,11,C.ink,true,{
+            Position=UDim2.fromOffset(19,7),Size=UDim2.new(1,-28,0,24)
+        })
+        local holder=new("Frame",shell,{
+            Name="SectionItems",Position=UDim2.fromOffset(9,35),
+            Size=UDim2.new(1,-18,0,0),BackgroundTransparency=1,BorderSizePixel=0
+        })
+        local layout=new("UIListLayout",holder,{
+            FillDirection=Enum.FillDirection.Vertical,SortOrder=Enum.SortOrder.LayoutOrder,
+            Padding=UDim.new(0,6)
+        })
+        for order,name in ipairs(definition.names) do
+            for _,entry in ipairs(UI.searchables) do
+                if entry.category=="Op" and entry.title==name and entry.obj.Parent==opPage then
+                    entry.obj.Parent=holder
+                    entry.obj.LayoutOrder=order
+                    break
+                end
+            end
+        end
+        local function refreshSectionSize()
+            if not shell.Parent then return end
+            holder.Size=UDim2.new(1,-18,0,layout.AbsoluteContentSize.Y)
+            shell.Size=UDim2.new(1,0,0,layout.AbsoluteContentSize.Y+45)
+        end
+        connect(layout:GetPropertyChangedSignal("AbsoluteContentSize"),refreshSectionSize)
+        task.defer(refreshSectionSize)
+    end
+end
+
 
 -- Inicializacion de settings sin toast
 setNotif(true, true)
@@ -1186,37 +1269,232 @@ for i, palette in ipairs(THEMES) do
     connect(b.MouseButton1Click, function() playSound(clickSound); applyTheme(palette) end)
 end
 
--- SERVER: cambio aleatorio. Sin API externa de listados NO se puede garantizar ocupación.
-pageTitle(pages.Server,"Server","Cambiar de servidor sin perder el acceso al panel.")
-UI.serverMode="random"
-UI.serverCard=card(pages.Server,185)
-text(UI.serverCard,"SERVER HOP",14,C.ink,true,{Position=UDim2.fromOffset(15,10),Size=UDim2.new(1,-30,0,24)})
-text(UI.serverCard,"Ocupación preferida",11,C.muted,false,{Position=UDim2.fromOffset(15,40),Size=UDim2.new(1,-30,0,22)})
-UI.serverModes={}
-for i,data in ipairs({{"ALEATORIO","random"},{"MENOS LLENO","low"},{"LLENO","high"}}) do
-    local b=new("TextButton",UI.serverCard,{Position=UDim2.new((i-1)/3,12,0,71),Size=UDim2.new(1/3,-18,0,30),BackgroundColor3=i==1 and C.navy or C.dark,TextColor3=C.white,Text=data[1],TextSize=9,Font=Enum.Font.GothamBold,BorderSizePixel=0})
-    round(b,5)
-    UI.serverModes[i]=b
-    connect(b.MouseButton1Click,function()
-        UI.serverMode=data[2]
-        for j,other in ipairs(UI.serverModes) do other.BackgroundColor3=j==i and C.navy or C.dark end
-        if data[2]~="random" then
-            notify("Server Hop","No es posible verificar ocupación sin un listado de servidores autorizado.",C.orange)
+-- SERVER HOP V64: seleccion de instancia publica distinta, nunca rejoin implicito.
+-- La busqueda requiere acceso HTTP provisto por el entorno de ejecucion.
+-- Un LocalScript normal no puede consultar por si solo la lista HTTP de servidores.
+do
+    pageTitle(pages.Server,"Server","Elegí un servidor distinto según su ocupación.")
+    UI.serverMode="random"
+    UI.serverBusy=false
+    UI.serverCard=card(pages.Server,213)
+    text(UI.serverCard,"SERVER HOP",14,C.ink,true,{
+        Position=UDim2.fromOffset(15,10),Size=UDim2.new(1,-30,0,24)
+    })
+    text(UI.serverCard,"OCUPACIÓN PREFERIDA",10,C.muted,true,{
+        Position=UDim2.fromOffset(15,39),Size=UDim2.new(1,-30,0,19)
+    })
+    UI.serverModes={}
+    local modeStyles={}
+
+    -- Boton con Frame de fondo, UICorner, UIStroke y UIGradient.
+    -- El TextButton es transparente: el borde no rodea las letras.
+    local function serverStyledButton(parent,label,position,size,color)
+        local surface=new("Frame",parent,{
+            Name="ServerButtonBackground",Position=position,Size=size,
+            BackgroundColor3=color,BorderSizePixel=0
+        })
+        round(surface,7)
+        local border=line(surface,C.white,.62)
+        border.Thickness=1
+        local gradient=new("UIGradient",surface,{
+            Rotation=90,Color=ColorSequence.new({
+                ColorSequenceKeypoint.new(0,color:Lerp(Color3.new(1,1,1),.17)),
+                ColorSequenceKeypoint.new(1,color:Lerp(Color3.new(0,0,0),.29))
+            })
+        })
+        local button=new("TextButton",surface,{
+            Name="ServerButtonAction",Size=UDim2.fromScale(1,1),
+            BackgroundTransparency=1,BorderSizePixel=0,
+            Text=label,TextColor3=C.white,TextSize=10,
+            Font=Enum.Font.GothamBold,AutoButtonColor=false,Active=true,
+            ZIndex=surface.ZIndex+1
+        })
+        connect(button.MouseEnter,function()
+            if border.Parent then tween(border,.12,{Transparency=.16}) end
+        end)
+        connect(button.MouseLeave,function()
+            if border.Parent then tween(border,.12,{Transparency=.62}) end
+        end)
+        return button,surface,border,gradient
+    end
+
+    local function recolorMode(style,selected)
+        local tone=selected and C.navy or C.dark
+        style.surface.BackgroundColor3=tone
+        style.border.Color=selected and C.white or C.line
+        style.border.Transparency=selected and .2 or .65
+        style.gradient.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,tone:Lerp(Color3.new(1,1,1),selected and .2 or .10)),
+            ColorSequenceKeypoint.new(1,tone:Lerp(Color3.new(0,0,0),.27))
+        })
+    end
+    local modes={{"ALEATORIO","random"},{"NO LLENO","low"},{"CASI LLENO","high"}}
+    for i,data in ipairs(modes) do
+        local button,surface,border,gradient=serverStyledButton(
+            UI.serverCard,data[1],
+            UDim2.new((i-1)/3,11,0,66),UDim2.new(1/3,-18,0,34),
+            i==1 and C.navy or C.dark
+        )
+        UI.serverModes[i]=button
+        modeStyles[i]={surface=surface,border=border,gradient=gradient}
+        recolorMode(modeStyles[i],i==1)
+        connect(button.Activated,function()
+            if UI.serverBusy then return end
+            playSound(clickSound)
+            UI.serverMode=data[2]
+            for j,style in ipairs(modeStyles) do
+                recolorMode(style,j==i)
+            end
+        end)
+    end
+    local hopButton,hopSurface=serverStyledButton(
+        UI.serverCard,"CAMBIAR DE SERVIDOR",
+        UDim2.new(0,15,0,114),UDim2.new(1,-30,0,39),C.red
+    )
+    UI.serverHop=hopButton
+    UI.serverHopStatus=text(UI.serverCard,"Se buscará una instancia pública diferente.",10,C.muted,false,{
+        Position=UDim2.fromOffset(15,164),Size=UDim2.new(1,-30,0,36),
+        TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top
+    })
+    local HttpService=game:GetService("HttpService")
+    local TeleportService=game:GetService("TeleportService")
+    local failedInstances={}
+
+    local function readServerPage(url)
+        -- Rutas HTTP compatibles con distintos entornos, sin inventar un servidor.
+        local ok,raw=pcall(function() return game:HttpGet(url) end)
+        if ok and type(raw)=="string" and #raw>0 then return raw end
+
+        local requestFn
+        if type(request)=="function" then requestFn=request end
+        if not requestFn and type(http_request)=="function" then requestFn=http_request end
+        if not requestFn and type(http)=="table" and type(http.request)=="function" then requestFn=http.request end
+        if not requestFn and type(syn)=="table" and type(syn.request)=="function" then requestFn=syn.request end
+        if requestFn then
+            local success,response=pcall(requestFn,{Url=url,Method="GET"})
+            if success and type(response)=="table" then
+                local status=tonumber(response.StatusCode or response.Status)
+                if (not status or status==200) and type(response.Body)=="string" then
+                    return response.Body
+                end
+            end
         end
+        -- Solo funciona si el contexto tiene permiso para acceder a HTTP.
+        local got,body=pcall(function() return HttpService:GetAsync(url) end)
+        if got and type(body)=="string" and #body>0 then return body end
+        return nil
+    end
+
+    local function getCandidates(mode)
+        local cursor=nil
+        local selected={}
+        local placeId=game.PlaceId
+        local seen={}
+        for page=1,5 do
+            local sorting=mode=="high" and "Desc" or "Asc"
+            local url="https://games.roblox.com/v1/games/"..tostring(placeId)
+                .."/servers/Public?sortOrder="..sorting.."&limit=100&excludeFullGames=false"
+            if cursor and cursor~="" then
+                url=url.."&cursor="..HttpService:UrlEncode(cursor)
+            end
+            local raw=readServerPage(url)
+            if not raw then return selected,"HTTP_UNAVAILABLE" end
+            local ok,result=pcall(function() return HttpService:JSONDecode(raw) end)
+            if not ok or type(result)~="table" or type(result.data)~="table" then
+                return selected,"INVALID_RESPONSE"
+            end
+            for _,server in ipairs(result.data) do
+                local id=server.id
+                local playing=tonumber(server.playing)
+                local capacity=tonumber(server.maxPlayers)
+                if type(id)=="string" and id~="" and id~=game.JobId
+                    and not seen[id] and not failedInstances[id]
+                    and playing and capacity and capacity>0
+                    and playing<capacity then
+                    seen[id]=true
+                    table.insert(selected,{id=id,playing=playing,maxPlayers=capacity})
+                end
+            end
+            cursor=result.nextPageCursor
+            if not cursor or cursor=="" or #selected>=110 then break end
+        end
+        if #selected==0 then return selected,"NO_SERVERS" end
+        table.sort(selected,function(a,b)
+            local af=a.playing/a.maxPlayers
+            local bf=b.playing/b.maxPlayers
+            if mode=="high" then
+                if af~=bf then return af>bf end
+                return a.playing>b.playing
+            elseif mode=="low" then
+                if af~=bf then return af<bf end
+                return a.playing<b.playing
+            end
+            return a.id<b.id
+        end)
+        if mode=="random" then
+            -- Barajar candidatos de instancias diferentes, no volver a la propia.
+            for i=#selected,2,-1 do
+                local j=math.random(i)
+                selected[i],selected[j]=selected[j],selected[i]
+            end
+        end
+        return selected,nil
+    end
+
+    local function setBusy(busy,message)
+        UI.serverBusy=busy
+        if hopButton.Parent then
+            hopButton.Text=busy and "BUSCANDO..." or "CAMBIAR DE SERVIDOR"
+        end
+        if UI.serverHopStatus.Parent and message then
+            UI.serverHopStatus.Text=message
+        end
+        if hopSurface.Parent then hopSurface.BackgroundTransparency=busy and .28 or 0 end
+    end
+
+    connect(hopButton.Activated,function()
+        if UI.serverBusy then return end
+        playSound(clickSound)
+        setBusy(true,"Consultando servidores públicos...")
+        task.spawn(function()
+            local mode=UI.serverMode
+            local candidates,reason=getCandidates(mode)
+            if #candidates==0 then
+                setBusy(false,reason=="HTTP_UNAVAILABLE"
+                    and "No hay acceso HTTP a la lista de servidores en este entorno."
+                    or "No se encontraron servidores disponibles.")
+                notify("Server Hop",UI.serverHopStatus.Text,C.orange)
+                return
+            end
+            local target=candidates[1]
+            if not target or target.id==game.JobId then
+                setBusy(false,"No se encontró un servidor diferente.")
+                return
+            end
+            setBusy(true,"Conectando a otro servidor ("..target.playing.."/"..target.maxPlayers..")...")
+            local ok,err=pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId,target.id,me)
+            end)
+            if not ok then
+                failedInstances[target.id]=true
+                setBusy(false,"Falló el teletransporte. Podés probar otro servidor.")
+                notify("Server Hop",tostring(err),C.orange)
+            else
+                -- La llamada puede completarse antes de la transición real.
+                task.delay(9,function()
+                    if UI.serverBusy and hopButton.Parent then
+                        setBusy(false,"Si no cambió de servidor, intentá de nuevo.")
+                    end
+                end)
+            end
+        end)
+    end)
+    connect(TeleportService.TeleportInitFailed,function(player,teleportResult,errorMessage,placeId,teleportOptions)
+        if player~=me or not UI.serverBusy then return end
+        setBusy(false,"Roblox no pudo entrar al servidor elegido.")
+        notify("Server Hop",tostring(errorMessage or teleportResult),C.orange)
     end)
 end
-UI.serverHop=new("TextButton",UI.serverCard,{Position=UDim2.new(0,15,0,117),Size=UDim2.new(1,-30,0,36),Text="SERVER HOP",TextColor3=C.white,BackgroundColor3=C.navy,Font=Enum.Font.GothamBold,TextSize=12,BorderSizePixel=0})
-round(UI.serverHop,7)
-connect(UI.serverHop.MouseButton1Click,function()
-    if UI.serverMode~="random" then
-        notify("Server Hop","Sin datos de ocupación no puedo elegir un servidor lleno o vacío.",C.orange)
-        return
-    end
-    local ok,err=pcall(function()
-        game:GetService("TeleportService"):Teleport(game.PlaceId,me)
-    end)
-    if not ok then notify("Server Hop",tostring(err),C.orange) end
-end)
 
 local syncSizeSlider
 UI.scaleCard = card(settingsPage, 119)
@@ -1298,7 +1576,7 @@ UI.buildConfigPayload=function()
         targetCollapsed=config.targetCollapsed,panelTransparency=config.panelTransparency,
         aimFov=config.aimFov,aimSmooth=config.aimSmooth,auraRadius=config.auraRadius,aimWallcheck=config.aimWallcheck,aimbot=config.aimbot,
         hotkeys=config.hotkeys,onScreen=config.onScreen,
-        enabledOptions={farm=state.farm,autoKillAll=state.autoKillAll,killAura=state.killAura,autoShot=state.autoShot,knifeNo=state.knifeNo,antiAfk=state.antiAfk,murder=state.murder,sheriff=state.sheriff,
+        enabledOptions={farm=state.farm,autoKillMurder=state.autoKillMurder,autoKillAll=state.autoKillAll,killAura=state.killAura,autoShot=state.autoShot,knifeNo=state.knifeNo,antiAfk=state.antiAfk,murder=state.murder,sheriff=state.sheriff,
             innocents=state.innocents,gunEsp=state.gunEsp,autoGun=state.autoGun,
             aim=state.aim,noclip=state.noclip,infiniteJump=state.infiniteJump,
             flying=state.flying,fastMove=state.fastMove}
@@ -1426,6 +1704,34 @@ end
 setupColumns("Home",3)
 setupColumns("Event",2)
 setupColumns("Op",7)
+-- V88: Distribucion manual de secciones OP en ambas columnas.
+-- La cantidad de tarjetas de la version anterior hacia que las cuatro
+-- secciones terminaran en la izquierda, dejando la derecha vacia.
+do
+    local columns = columnPages.Op
+    if columns then
+        local layout = {
+            OpSection1 = {column=1, order=10}, -- ESP / VISUALES
+            OpSection2 = {column=1, order=20}, -- MURDER
+            OpSection3 = {column=2, order=10}, -- SHERIFF / KILL MURDER
+            OpSection4 = {column=2, order=20}, -- OTRAS HERRAMIENTAS
+        }
+        for sectionName, slot in pairs(layout) do
+            local section = opPage:FindFirstChild(sectionName, true)
+            if section and section:IsA("Frame") then
+                section.Parent = columns[slot.column]
+                section.LayoutOrder = slot.order
+                section.Size = UDim2.new(1, 0, 0, section.Size.Y.Offset)
+            end
+        end
+        -- El encabezado se mantiene al comienzo de la primera columna.
+        for _, child in ipairs(columns[1]:GetChildren()) do
+            if child:IsA("Frame") and not layout[child.Name] then
+                child.LayoutOrder = 0
+            end
+        end
+    end
+end
 setupColumns("Aim",4)
 setupColumns("Player",4)
 setupColumns("Settings",7)
@@ -1583,23 +1889,66 @@ function UI.cleanVisual(p)
     visuals[p] = nil
 end
 -- Restituir exactamente las propiedades originales de movimiento.
+-- V76: el snapshot se restaura al terminar CADA ruta y se crea uno nuevo para la siguiente coin.
+-- Root y Body conservan colision y quedan sin anclaje; las demas partes usan NoCollide. Al dejar el Collector,
+-- o si una acción prioritaria toma control, se restablece el estado guardado.
+-- V72: Collector erguido sin animacion de salto; colision en todas las partes.
+-- V90: al cancelar un desplazamiento, no conservar las velocidades producidas
+-- por golpes de otros jugadores contra un personaje anclado.
+UI.farmRecoverySerial = 0
 function UI.restoreFarmCharacter()
     if runningTween then runningTween:Cancel(); runningTween = nil end
+    UI.farmRecoverySerial += 1
+    local serial = UI.farmRecoverySerial
     local snap = savedParts
     savedParts = nil
+    if UI.coinStandby then UI.coinStandby = false end
     if not snap then return end
-    for part, collidable in pairs(snap.parts) do
-        if part and part.Parent then part.CanCollide = collidable end
+
+    local root = snap.hrp
+    local hum = snap.humanoid
+    local char = root and root.Parent
+    if root and root.Parent then
+        -- Parar todo impulso ANTES de reactivar la simulación normal.
+        root.Anchored = true
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        if snap.coinOriginalRotation then
+            root.CFrame = CFrame.new(root.Position) * snap.coinOriginalRotation
+        end
     end
-    if snap.hrp and snap.hrp.Parent then
-        snap.hrp.Anchored = snap.anchored
-        snap.hrp.AssemblyLinearVelocity = Vector3.zero
-        snap.hrp.AssemblyAngularVelocity = Vector3.zero
+    for part, previous in pairs(snap.parts) do
+        if part and part.Parent then
+            part.CanCollide = state.noclip and false or previous
+            -- No dejar fuerzas residuales en brazos, piernas ni accesorios.
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
     end
-    if snap.humanoid and snap.humanoid.Parent then
-        snap.humanoid.PlatformStand = snap.platform
-        snap.humanoid.AutoRotate = snap.autoRotate
-        snap.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    if hum and hum.Parent then
+        hum.PlatformStand = snap.platform
+        hum.AutoRotate = snap.autoRotate
+    end
+    if root and root.Parent then
+        root.Anchored = snap.anchored
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+    -- Roblox puede aplicar un empujón un frame después de soltar el anclaje.
+    -- Solo neutralizar impulsos anormales; no congelar el movimiento normal.
+    if root and root.Parent and not snap.anchored then
+        task.spawn(function()
+            for _ = 1, 5 do
+                task.wait(0.045)
+                if UI.farmRecoverySerial ~= serial or savedParts or not root.Parent
+                    or me.Character ~= char or state.busy or state.autoKillMurder then break end
+                local linear = root.AssemblyLinearVelocity
+                if linear.Magnitude > 75 or math.abs(linear.Y) > 55 then
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+        end)
     end
 end
 function UI.snapshotCharacter()
@@ -1614,14 +1963,18 @@ function UI.snapshotCharacter()
     return snap
 end
 function UI.beginMove(snap)
+    UI.farmRecoverySerial += 1
     savedParts = snap
-    -- Guardar/restaurar colisiones reales, sin alterar el cursor ni la camara.
-    -- El HRP anclado arrastra al rig mediante sus uniones; evita empujones
-    -- mientras el tween lo lleva a la moneda.
+    -- Durante un tween anclado, las colisiones contra jugadores u obstáculos
+    -- pueden acumular impulsos gigantes que explotan al liberar el personaje.
+    -- CanTouch permanece habilitado para los contactos de CoinVisual.
     for bp in pairs(snap.parts) do
-        if bp.Parent then bp.CanCollide = false end
+        if bp.Parent then
+            bp.CanCollide = false
+            bp.AssemblyLinearVelocity = Vector3.zero
+            bp.AssemblyAngularVelocity = Vector3.zero
+        end
     end
-    snap.hrp.CanCollide = false
     snap.hrp.AssemblyLinearVelocity = Vector3.zero
     snap.hrp.AssemblyAngularVelocity = Vector3.zero
     snap.humanoid.PlatformStand = true
@@ -1629,6 +1982,7 @@ function UI.beginMove(snap)
     snap.hrp.Anchored = true
 end
 headerButton("×", -39, C.red, function()
+    state.autoKillMurder = false
     state.closing = true
     state.farm = false; if returnFromRetreat then returnFromRetreat() end; retreatState = nil; state.murder = false; state.sheriff = false
     state.innocents = false; state.noclip = false; state.infiniteJump = false
@@ -1723,7 +2077,7 @@ function UI.getStableEspRole(p)
         previous.lastSeen=now
         return detected
     end
-    if previous.role~="Player" and now-previous.lastSeen<1.5 then
+    if previous.role~="Player" and now-previous.lastSeen<4 then
         return previous.role
     end
     previous.role="Player"
@@ -1831,20 +2185,52 @@ for _, entry in ipairs(UI.searchables) do
         end
     end
 end
-connect(me.CharacterAdded, function()
+connect(me.CharacterAdded, function(character)
+    -- La instancia anterior de HumanoidRootPart y su tween no son reutilizables
+    -- tras un respawn. En particular, no dejar referencias a un rig muerto.
+    if runningTween then runningTween:Cancel(); runningTween = nil end
     currentOwnRole = nil
     roleCache[me] = nil
     visited = {}
     savedParts = nil
     retreatState = nil
+    UI.coinStandby = false
+    UI.coinStandbyOrigin = nil
+    UI.coinSearchOrigin = nil
+    task.defer(function()
+        local newRoot = character:WaitForChild("HumanoidRootPart", 8)
+        if newRoot and character == me.Character then UI.coinSearchOrigin = newRoot.Position end
+    end)
+    nearbyDangerActive = false
+    escapeUntil = 0
+    -- Cuando la bolsa llena causó el respawn, rearmar el Collector.
+    if UI.resumeFarmAfterRespawn then
+        UI.resumeFarmAfterRespawn = false
+        task.spawn(function()
+            local hum = character:WaitForChild("Humanoid", 8)
+            local root = character:WaitForChild("HumanoidRootPart", 8)
+            if hum and root and hum.Health > 0 and not state.closing then
+                UI.coinSearchOrigin = root.Position
+                task.wait(0.65)
+                if not state.farm and not state.busy then
+                    setFarm(true, true)
+                    UI.coinStatusText.Text = "Nueva vida: buscando coins"
+                end
+            end
+        end)
+    end
 end)
 
--- COIN COLLECTOR. La camara queda libre mientras el rig viaja anclado.
--- Al tocar la moneda se restaura la fisica para caer al piso antes de avanzar.
+-- COIN COLLECTOR. Movimiento vertical con animacion de salto y HRP anclado solo durante el viaje.
+-- Entre monedas se conserva la postura horizontal. Al apagar o quedarse sin monedas se restaura.
 function UI.nearestMurderDistance(position)
     local best=math.huge
     for _, person in ipairs(Players:GetPlayers()) do
-        if person ~= me and UI.getRole(person)=="Murder" then
+        if person ~= me and (
+            UI.getStableEspRole(person)=="Murder"
+            or person:GetAttribute("Role")=="Murder"
+            or (person.Character and person.Character:GetAttribute("Role")=="Murder")
+        ) then
             local mr=person.Character and person.Character:FindFirstChild("HumanoidRootPart")
             local hum=person.Character and person.Character:FindFirstChildOfClass("Humanoid")
             if mr and (not hum or hum.Health>0) then
@@ -1854,30 +2240,36 @@ function UI.nearestMurderDistance(position)
     end
     return best
 end
+-- V81: la búsqueda utiliza un centro estable para no perder las coins
+-- cuando se mueve el personaje; el límite configurable (700/1020/etc.) se respeta.
 function UI.coinTarget(root, allowUnsafe)
-    local container=workspace:FindFirstChild("CoinContainer",true)
-    if not container then return nil,nil,false end
-    local safePart,safeDist=nil,math.huge
-    local unsafePart,unsafeDist=nil,math.huge
-    for _, obj in ipairs(container:GetChildren()) do
-        if obj.Name=="Coin_Server" then
-            local part=obj:FindFirstChild("CoinVisual")
-            if part and part:IsA("BasePart") and not visited[part] then
-                local dist=(root.Position-part.Position).Magnitude
-                if dist<=config.maxCoinDistance then
-                    if UI.nearestMurderDistance(part.Position)>=SAFE_COIN_RADIUS then
-                        if dist<safeDist then safePart,safeDist=part,dist end
-                    elseif dist<unsafeDist then
-                        unsafePart,unsafeDist=part,dist
-                    end
-                end
-            end
+    local container = workspace:FindFirstChild("CoinContainer", true)
+    if not container then return nil, nil, false end
+    local center = UI.coinSearchOrigin or root.Position
+    local safePart, safeDist = nil, math.huge
+    local unsafeFound, withinRange = false, 0
+    local function consider(obj)
+        if obj.Name ~= "Coin_Server" then return end
+        local part = obj:FindFirstChild("CoinVisual", true)
+        if not part or not part:IsA("BasePart") or not part.Parent then return end
+        local fromCenter = (center - part.Position).Magnitude
+        if fromCenter > config.maxCoinDistance then return end
+        withinRange += 1
+        if UI.nearestMurderDistance(part.Position) < SAFE_COIN_RADIUS then
+            unsafeFound = true
+            return
         end
+        if visited[part] then return end
+        local dist = (root.Position - part.Position).Magnitude
+        if dist < safeDist then safePart, safeDist = part, dist end
     end
-    if safePart then return safePart,safeDist,false end
-    -- No elegir monedas a menos de SAFE_COIN_RADIUS del Murder, ni tras esperar.
-    return nil,nil,(unsafePart~=nil)
+    for _, obj in ipairs(container:GetDescendants()) do
+        consider(obj)
+    end
+    UI.coinVisibleCount = withinRange
+    return safePart, safePart and safeDist or nil, unsafeFound
 end
+
 -- Refugio del Coin Collector cuando un Murder se acerca.
 -- Se conserva la posición de origen para regresar si el peligro desaparece.
 function UI.teleportFarmRoot(root, destination)
@@ -1911,18 +2303,21 @@ function UI.farCoinFromMurder()
     if not container then return nil, 0, "no_container" end
     local bestCoin, bestSafety, bestTravel = nil, -1, math.huge
     local available, safeCount = 0, 0
+    local farmCenter = retreatState and retreatState.origin.Position or UI.coinStandbyOrigin
+        or (me.Character and me.Character:FindFirstChild("HumanoidRootPart") and me.Character.HumanoidRootPart.Position)
     -- En algunos mapas las coins están dentro de subcarpetas; no asumir hijos directos.
     for _, coin in ipairs(container:GetDescendants()) do
         if coin.Name == "Coin_Server" then
             local visual = coin:FindFirstChild("CoinVisual", true)
-            if visual and visual:IsA("BasePart") and visual.Parent then
+            if visual and visual:IsA("BasePart") and visual.Parent
+                and farmCenter and (visual.Position-farmCenter).Magnitude <= config.maxCoinDistance then
                 available += 1
                 local safety = UI.nearestMurderDistance(visual.Position)
                 if safety >= SAFE_COIN_RADIUS then
                     safeCount += 1
                     local travel = (visual.Position - RETREAT_POINT).Magnitude
-                    -- La selección de escape no debe depender de maxCoinDistance
-                    -- ni de visited: importa elegir la coin más alejada del Murder.
+                    -- La selección de escape respeta 1020 studs desde el origen
+                    -- y evita monedas demasiado cercanas al Murder.
                     if safety > bestSafety or (safety == bestSafety and travel < bestTravel) then
                         bestCoin, bestSafety, bestTravel = visual, safety, travel
                     end
@@ -1948,24 +2343,9 @@ function UI.dodgeNearbyMurder()
     end
 
     if retreatState then
-        -- Si la ronda se quedó sin monedas mientras estábamos refugiados,
-        -- regresar al punto anterior y dejar que el personaje baje al suelo.
-        local folder = workspace:FindFirstChild("CoinContainer", true)
-        local coinsRemain = false
-        if folder then
-            for _, item in ipairs(folder:GetDescendants()) do
-                if item.Name == "Coin_Server" and item:FindFirstChild("CoinVisual", true) then
-                    coinsRemain = true
-                    break
-                end
-            end
-        end
-        if not coinsRemain then
-            returnFromRetreat()
-            escapeUntil = os.clock() + 1.5
-            UI.coinStatusText.Text = "Sin coins: regresando al suelo"
-            return true
-        end
+        -- Sin coins también hay que permanecer a salvo: la ronda puede estar
+        -- momentáneamente sin monedas mientras el Murder sigue cerca.
+        -- No cancelar el refugio por ausencia de Coin_Server.
         -- Refugio en lobby, con gravedad y física normales; no forzar altura ni anclaje.
         if root.Anchored then root.Anchored = false end
         local threatAtOrigin = UI.nearestMurderDistance(retreatState.origin.Position)
@@ -1987,11 +2367,8 @@ function UI.dodgeNearbyMurder()
                 UI.coinStatusText.Text = reason == "no_container" and "Sin CoinContainer: no se puede buscar coins"
                     or reason == "no_coins" and "No hay coins disponibles en esta ronda"
                     or "Sin coins seguras cerca"
-                if reason == "no_coins" or reason == "no_container" then
-                    returnFromRetreat()
-                    escapeUntil = os.clock() + 1.5
-                    return true
-                end
+                -- Aunque las monedas aún no existan, mantener la vigilancia
+                -- y volver a intentar mientras el Murder siga en el origen.
                 -- Evitar cualquier anclaje/tween o velocidad ascendente
                 -- mientras la búsqueda no encuentra una moneda.
                 if runningTween or savedParts then UI.restoreFarmCharacter() end
@@ -2018,23 +2395,17 @@ function UI.dodgeNearbyMurder()
         return true
     end
 
-    if os.clock() < escapeUntil or UI.nearestMurderDistance(root.Position) >= DANGER_RADIUS then
+    if UI.nearestMurderDistance(root.Position) >= DANGER_RADIUS then
         nearbyDangerActive = false
         return false
     end
 
-    -- No escapar desde el lobby cuando no hay monedas de una ronda activa.
-    local coinFolder = workspace:FindFirstChild("CoinContainer", true)
-    local roundCoins = false
-    if coinFolder then
-        for _, coin in ipairs(coinFolder:GetDescendants()) do
-            if coin.Name == "Coin_Server" and coin:FindFirstChild("CoinVisual", true) then
-                roundCoins = true
-                break
-            end
-        end
+    -- El peligro se comprueba aun sin CoinContainer: una aparición repentina
+    -- no debe dejar el escape desactivado por una ronda aún sin coins.
+    if UI.coinStandby then
+        UI.coinStandby = false
+        UI.coinStandbyOrigin = nil
     end
-    if not roundCoins then return false end
 
     retreatState = {origin = root.CFrame, started = os.clock(), character = char}
     nearbyDangerActive = true
@@ -2048,120 +2419,192 @@ function UI.dodgeNearbyMurder()
     end
     return true
 end
--- Si no hay caramelos, hacer una sola maniobra evasiva por intervalo.
--- Nunca anclar al personaje en espera: la fisica y los controles se mantienen normales.
-function UI.idleEvasion()
-    -- Sin coins: cancelar cualquier movimiento anterior y devolver el control
-    -- físico normal. Nunca trasladar al jugador hacia arriba ni crear impulso.
-    if runningTween or savedParts then UI.restoreFarmCharacter() end
-    local char = me.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not (root and hum and hum.Health > 0) then return end
-    root.Anchored = false
-    hum.PlatformStand = false
-    hum.AutoRotate = true
-    -- Eliminar solo el impulso ASCENDENTE residual, sin modificar X/Z ni
-    -- la velocidad de caída. Esto evita el salto vertical al agotarse coins.
-    local vel = root.AssemblyLinearVelocity
-    if vel.Y > 0 then
-        root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+-- Espera interrumpible: revisa al Murder incluso cuando no hay coins
+-- o el Collector está entre dos recorridos. No modifica la física.
+function UI.waitFarmResponsive(seconds)
+    local deadline = os.clock() + seconds
+    while state.farm and not state.closing and not state.busy and os.clock() < deadline do
+        if UI.dodgeNearbyMurder() then return true end
+        task.wait(0.03)
     end
-    if hum.FloorMaterial == Enum.Material.Air then
-        -- Cuando una antigua animación/tween nos dejó suspendidos, buscar
-        -- piso REAL bajo los pies y situarnos cerca de él. Nunca elevar Y.
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local ignored = {char}
-        local coins = workspace:FindFirstChild("CoinContainer", true)
-        if coins then table.insert(ignored, coins) end
-        params.FilterDescendantsInstances = ignored
-        params.IgnoreWater = true
-        local floorHit = workspace:Raycast(root.Position, Vector3.new(0, -10000, 0), params)
-        if floorHit and floorHit.Normal.Y > 0.5 then
-            local landingY = floorHit.Position.Y + math.max(3, hum.HipHeight + 2)
-            if root.Position.Y > landingY + 12 then
-                root.CFrame = CFrame.new(root.Position.X, landingY, root.Position.Z) * root.CFrame.Rotation
-                root.AssemblyLinearVelocity = Vector3.zero
-            end
-        end
-        hum:ChangeState(Enum.HumanoidStateType.Freefall)
-    end
+    return false
 end
 
-function UI.startCoinJumpAnimation(hum)
-    local char=hum.Parent
-    local animate=char and char:FindFirstChild("Animate")
-    local jump=animate and animate:FindFirstChild("jump")
-    local jumpAnim=jump and jump:FindFirstChildWhichIsA("Animation")
-    local animator=hum:FindFirstChildOfClass("Animator")
-    if not animator or not jumpAnim then return nil end
-    local ok,track=pcall(function() return animator:LoadAnimation(jumpAnim) end)
-    if ok and track then
-        track.Priority=Enum.AnimationPriority.Action
-        track.Looped=true
-        track:Play(0.12,1,1)
-        return track
-    end
-    return nil
+-- Si no hay caramelos, no aplicar impulsos ni alterar la fisica fuera del punto de espera.
+function UI.idleEvasion()
+    -- En espera no forzar CFrame, Freefall ni anclar el personaje.
+    if runningTween or savedParts then UI.restoreFarmCharacter() end
+    local root = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
+    if root and root.Anchored then root.Anchored = false end
 end
+
+-- V79: el punto de espera reemplaza el antiguo movimiento involuntario hacia arriba.
+UI.coinStandbyPoint = Vector3.new(-102.85, 237.97, 9009.20)
+UI.coinStandby = false
+UI.coinStandbyOrigin = nil
+function UI.goToCoinStandby()
+    if not state.farm or state.busy or retreatState then return end
+    local character = me.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not root or not humanoid or humanoid.Health <= 0 then return end
+
+    local distance = (root.Position - UI.coinStandbyPoint).Magnitude
+    -- Respetar la regla anterior: solo viajar si el punto esta a 400 studs o menos.
+    if not UI.coinStandby and distance > 400 then
+        UI.coinStatusText.Text = "Sin coins: esperando en el lugar (punto lejano)"
+        UI.waitFarmResponsive(0.2)
+        return
+    end
+
+    -- La espera se mantiene con el HRP anclado: NUNCA devolver la fisica
+    -- al llegar, porque debajo del vector puede no haber suelo.
+    if UI.coinStandby then
+        if not savedParts or savedParts.hrp ~= root then
+            UI.coinStandby = false
+        else
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.Anchored = true
+            UI.coinStatusText.Text = "Esperando coins: posicion estable"
+            UI.waitFarmResponsive(0.16)
+            return
+        end
+    end
+
+    local snapshot = UI.snapshotCharacter()
+    if not snapshot then return end
+    UI.beginMove(snapshot)
+    UI.coinStandby = false
+    UI.coinStandbyOrigin = root.CFrame
+
+    -- Primero bajar un poco y avanzar por debajo del punto; al final subir
+    -- hasta el Vector3 exacto y permanecer anclado ahi.
+    local orientation = root.CFrame.Rotation
+    local down = Vector3.new(0, 3, 0)
+    local stages = {
+        {pos = root.Position - down, speed = 61},
+        {pos = UI.coinStandbyPoint - down, speed = 61},
+        {pos = UI.coinStandbyPoint, speed = 61},
+    }
+    local completed = true
+    for _, stage in ipairs(stages) do
+        if not state.farm or state.busy or state.closing or retreatState
+            or character ~= me.Character or not root.Parent then
+            completed = false
+            break
+        end
+        local stageDistance = (root.Position - stage.pos).Magnitude
+        if stageDistance > 0.05 then
+            local duration = math.max(stageDistance / stage.speed, 0.025)
+            local moveTween = tween(root, duration,
+                {CFrame = CFrame.new(stage.pos) * orientation}, Enum.EasingStyle.Linear)
+            runningTween = moveTween
+            local started = os.clock()
+            while state.farm and not state.busy and not state.closing
+                and character == me.Character and root.Parent and not retreatState
+                and runningTween == moveTween
+                and moveTween.PlaybackState == Enum.PlaybackState.Playing do
+                -- Interrumpir inmediatamente si aparece una coin o el Murder.
+                if UI.nearestMurderDistance(root.Position) < DANGER_RADIUS
+                    or UI.coinTarget(root, false) then break end
+                if os.clock() - started > duration + 1 then break end
+                task.wait(0.04)
+            end
+            local done = moveTween.PlaybackState == Enum.PlaybackState.Completed
+            if not done then moveTween:Cancel() end
+            if runningTween == moveTween then runningTween = nil end
+            if not done then
+                completed = false
+                break
+            end
+        end
+    end
+
+    if completed and state.farm and not state.busy and not state.closing
+        and character == me.Character and not retreatState and savedParts == snapshot then
+        root.CFrame = CFrame.new(UI.coinStandbyPoint) * orientation
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.Anchored = true
+        UI.coinStandby = true
+        UI.coinStatusText.Text = "Esperando coins en el punto de espera"
+    else
+        -- Cancelacion, coins nuevas, peligro o muerte: devolver fisica original.
+        UI.coinStandby = false
+        UI.coinStandbyOrigin = nil
+        if savedParts == snapshot then UI.restoreFarmCharacter() end
+    end
+    if state.farm then UI.waitFarmResponsive(0.08) end
+end
+
+-- V89: seguro anticaida en el destino de espera.
+-- Se mantiene SOLO si Collector continua activo, no hay otra accion
+-- y se trata del mismo personaje para el que se guardo el snapshot.
+connect(RunService.Stepped, function()
+    if not UI.coinStandby or not state.farm or state.busy or state.closing
+        or retreatState or state.autoKillMurder then return end
+    local character = me.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local snap = savedParts
+    if not root or not snap or snap.hrp ~= root or not root.Parent then
+        UI.coinStandby = false
+        return
+    end
+    if not root.Anchored then root.Anchored = true end
+    if (root.Position - UI.coinStandbyPoint).Magnitude > 0.15 then
+        root.CFrame = CFrame.new(UI.coinStandbyPoint) * root.CFrame.Rotation
+    end
+    if root.AssemblyLinearVelocity.Magnitude > 0 then root.AssemblyLinearVelocity = Vector3.zero end
+    if root.AssemblyAngularVelocity.Magnitude > 0 then root.AssemblyAngularVelocity = Vector3.zero end
+end)
+
 function UI.moveToCoin(part, distance)
+    if not state.farm or state.busy or not part or not part.Parent then return end
+    -- V79: viaje original erguido, sin animación de salto ni giro de 90 grados.
+    -- La física normal vuelve después de CADA moneda.
+    if UI.coinStandby then
+        UI.coinStandby = false
+        UI.restoreFarmCharacter()
+    end
     local snap = UI.snapshotCharacter()
-    if not snap or not part or not part.Parent or state.busy then return end
-    snap.humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-    local jumpTrack=UI.startCoinJumpAnimation(snap.humanoid)
+    if not snap then return end
+    if UI.nearestMurderDistance(snap.hrp.Position) < DANGER_RADIUS then
+        UI.dodgeNearbyMurder()
+        return
+    end
     UI.beginMove(snap)
-    -- El centro del HumanoidRootPart debe coincidir con CoinVisual,
-    -- no quedar 1.3 studs por encima de la moneda.
-    local destination = CFrame.new(part.Position) * snap.hrp.CFrame.Rotation
-    local duration = math.max(distance / config.coinSpeed, 0.04)
-    runningTween = tween(snap.hrp, duration, {CFrame = destination}, Enum.EasingStyle.Linear)
-    local started = os.clock()
-    while state.farm and not state.busy and #Players:GetPlayers() > 3 and not state.closing and snap.hrp.Parent and part.Parent
-        and runningTween and runningTween.PlaybackState == Enum.PlaybackState.Playing do
-        if os.clock() - started > duration + 2 then break end
-        if UI.nearestMurderDistance(part.Position) < SAFE_COIN_RADIUS then
-            if runningTween then runningTween:Cancel() end
+    local root = snap.hrp
+    -- Mantener el centro del HRP cerca del volumen de CoinVisual, sin inclinación.
+    local underOffset = math.clamp((part.Size.Y + root.Size.Y) * 0.5 - 0.65, 0.12, 1.45)
+    local destinationPosition = part.Position - Vector3.new(0, underOffset, 0)
+    local destination = CFrame.new(destinationPosition) * root.CFrame.Rotation
+    local duration = math.max((root.Position - destinationPosition).Magnitude / 35, 0.04)
+    runningTween = tween(root, duration, {CFrame = destination}, Enum.EasingStyle.Linear)
+    local activeTween = runningTween
+    local startTime = os.clock()
+    while state.farm and not state.busy and not state.closing and root.Parent and part.Parent
+        and runningTween == activeTween and activeTween.PlaybackState == Enum.PlaybackState.Playing do
+        if os.clock() - startTime > duration + 2 then break end
+        if UI.nearestMurderDistance(root.Position) < DANGER_RADIUS
+            or UI.nearestMurderDistance(part.Position) < SAFE_COIN_RADIUS then
+            activeTween:Cancel()
             visited[part] = nil
+            UI.dodgeNearbyMurder()
             break
         end
         if UI.dodgeNearbyMurder() then break end
-        task.wait(0.04)
+        task.wait(0.025)
     end
-    -- Solo completar la aproximacion si el tween llego a la moneda.
-    -- Mantenemos el HRP centrado unos instantes para dar tiempo al contacto.
-    if state.farm and not state.busy and part.Parent and snap.hrp.Parent
-        and runningTween and runningTween.PlaybackState == Enum.PlaybackState.Completed then
-        snap.hrp.CFrame = CFrame.new(part.Position) * snap.hrp.CFrame.Rotation
+    if state.farm and not state.busy and root.Parent and part.Parent
+        and runningTween == activeTween and activeTween.PlaybackState == Enum.PlaybackState.Completed then
+        root.CFrame = destination
         task.wait(0.12)
     end
-    UI.restoreFarmCharacter()
-    if jumpTrack then pcall(function() jumpTrack:Stop(0.12); jumpTrack:Destroy() end) end
-    if retreatState then
-        -- Si se activó el escape durante un tween, no teletransportar otra vez
-        -- ni anclar: el controlador del refugio ya gestiona el regreso.
-        if snap.hrp.Parent and retreatState.character == snap.hrp.Parent then
-            snap.hrp.Anchored = false
-        end
-        return
-    end
-    -- Dejar que la gravedad y el Humanoid tomen el control antes de continuar.
-    -- Al aterrizar, esperar el descanso completo de 0.5 s.
-    local hum = snap.humanoid
-    local root = snap.hrp
-    if state.farm and hum.Parent and root.Parent and hum.Health > 0 then
-        hum.PlatformStand = false
-        root.Anchored = false
-        hum:ChangeState(Enum.HumanoidStateType.Freefall)
-        local deadline = os.clock()+4
-        while state.farm and not state.busy and not state.closing and hum.Parent and root.Parent and hum.Health>0 and os.clock()<deadline do
-            if hum.FloorMaterial ~= Enum.Material.Air then break end
-            task.wait(0.06)
-        end
-        if state.farm and not state.busy then
-            hum:ChangeState(Enum.HumanoidStateType.Running)
-            task.wait(0.5)
-        end
+    if runningTween == activeTween then runningTween = nil end
+    if savedParts == snap then UI.restoreFarmCharacter() end
+    if state.farm and not state.busy and not retreatState then
+        UI.waitFarmResponsive(0.5)
     end
 end
 
@@ -2195,7 +2638,7 @@ function UI.getTargetRoot(p)
     if root and hum and hum.Health > 0 then return root, hum end
     return nil, nil
 end
-function UI.attackTarget(p, maxDuration, auraOrigin)
+function UI.attackTarget(p, maxDuration, auraOrigin, bagOrigin, bagRadius)
     local knife = UI.equippedKnife()
     if not knife then
         notify("Sin herramienta", "No tienes los requisitos adecuados", C.orange)
@@ -2210,6 +2653,7 @@ function UI.attackTarget(p, maxDuration, auraOrigin)
         local root, hum = UI.getTargetRoot(p)
         if not root or hum.Health <= 0 then return true end
         if auraOrigin and (not state.killAura or (root.Position - auraOrigin).Magnitude > config.auraRadius) then return false end
+        if bagOrigin and (root.Position - bagOrigin).Magnitude > (bagRadius or 1050) then return false end
         if knife.Parent ~= me.Character then return false end
         -- Detrás de la orientación del objetivo, sin modificar colisiones.
         ownRoot.CFrame = root.CFrame * CFrame.new(0, 0, 0.8) -- V26: acercamiento trasero más pegado
@@ -2225,7 +2669,7 @@ function UI.suspendFarm()
     if runningTween then runningTween:Cancel(); runningTween=nil end
     UI.restoreFarmCharacter()
 end
-function UI.runCombat(mode, chosenTarget)
+function UI.runCombat(mode, chosenTarget, collectorOrigin)
     if combatBusy or state.busy then
         notify("Ocupado", "Hay otra acción en curso", C.orange)
         return
@@ -2240,6 +2684,10 @@ function UI.runCombat(mode, chosenTarget)
     UI.suspendFarm()
     local originalRoot = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
     local originalCFrame = originalRoot and originalRoot.CFrame
+    -- Solo para bolsa llena: radio medido desde la posición donde se completó la recolección.
+    local bagFull = mode == "BagFull"
+    local bagRadius = 1050
+    local bagOrigin = bagFull and (collectorOrigin or (originalRoot and originalRoot.Position)) or nil
     local targets = {}
     if mode == "Target" or mode == "Aura" then
         if chosenTarget and chosenTarget ~= me and not state.blacklist[chosenTarget.UserId] and UI.getRole(chosenTarget) ~= "Murder"
@@ -2257,7 +2705,9 @@ function UI.runCombat(mode, chosenTarget)
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= me and not state.blacklist[p.UserId] and UI.getRole(p) ~= "Murder" then
                 local r = UI.getTargetRoot(p)
-                if r and originalRoot and (r.Position - originalRoot.Position).Magnitude <= config.maxKillDistance then
+                local center = bagFull and bagOrigin or (originalRoot and originalRoot.Position)
+                local limit = bagFull and bagRadius or config.maxKillDistance
+                if r and center and (r.Position - center).Magnitude <= limit then
                     targets[#targets + 1] = p
                 end
             end
@@ -2266,6 +2716,13 @@ function UI.runCombat(mode, chosenTarget)
             local ra,rb=UI.getRole(a),UI.getRole(b)
             if ra=="Sheriff" and rb~="Sheriff" then return true end
             if rb=="Sheriff" and ra~="Sheriff" then return false end
+            -- Después del Sheriff, en bolsa llena atacar primero al más cercano.
+            if bagFull and bagOrigin then
+                local aRoot, bRoot = UI.getTargetRoot(a), UI.getTargetRoot(b)
+                local aDistance = aRoot and (aRoot.Position - bagOrigin).Magnitude or math.huge
+                local bDistance = bRoot and (bRoot.Position - bagOrigin).Magnitude or math.huge
+                if math.abs(aDistance - bDistance) > 0.01 then return aDistance < bDistance end
+            end
             return a.UserId<b.UserId
         end)
         if #targets == 0 then notify("Kill All", "No hay objetivos dentro del alcance", C.orange) end
@@ -2276,10 +2733,11 @@ function UI.runCombat(mode, chosenTarget)
         if root and originalRoot and not state.blacklist[p.UserId] and UI.getRole(p) ~= "Murder"
             and (mode == "Target"
                 or (mode == "Aura" and (root.Position - originalRoot.Position).Magnitude <= config.auraRadius)
-                or (mode ~= "Aura" and (root.Position - originalRoot.Position).Magnitude <= config.maxKillDistance)) then
+                or (bagFull and bagOrigin and (root.Position - bagOrigin).Magnitude <= bagRadius)
+                or (mode ~= "Aura" and not bagFull and (root.Position - originalRoot.Position).Magnitude <= config.maxKillDistance)) then
             -- Sigue al objetivo mientras esté vivo hasta un límite de seguridad.
             if UI.getRole(p) ~= "Murder" then
-                UI.attackTarget(p, mode == "Aura" and 0.45 or mode == "Sheriff" and 20 or mode == "Target" and 15 or 8, mode == "Aura" and originalCFrame.Position or nil)
+                UI.attackTarget(p, mode == "Aura" and 0.45 or mode == "Sheriff" and 20 or mode == "Target" and 15 or 8, mode == "Aura" and originalCFrame.Position or nil, bagOrigin, bagFull and bagRadius or nil)
             end
         end
     end
@@ -2292,6 +2750,119 @@ function UI.runCombat(mode, chosenTarget)
     state.busy = false
     if #targets > 0 and mode ~= "Aura" then notify("Acción finalizada", "Se completó el recorrido de objetivos", C.mint) end
 end
+
+-- V79: bolsa cacheada aunque el Collector esté apagado; revisar cada activación.
+-- Esta caché se actualiza con CoinCollected y se reinicia al recibir CoinsStarted.
+UI.bagLatest = {}
+UI.bagProcessing = false
+UI.resumeFarmAfterRespawn = false
+UI.ignoreOldBagGui = false
+function UI.findFullBag()
+    for name, info in pairs(UI.bagLatest) do
+        if info.capacity > 0 and info.amount >= info.capacity then return name end
+    end
+    -- La GUI puede conservar la marca FULL de la vida anterior mientras
+    -- comienza una ronda nueva: no usarla hasta recibir datos frescos.
+    if UI.ignoreOldBagGui then return nil end
+    -- Respaldo si la bolsa ya estaba llena antes de iniciar el panel: consultar
+    -- los indicadores que usa la GUI original del juego.
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj.Name == "FullBagIcon" and obj:IsA("GuiObject") and obj.Visible then
+            local frame = obj.Parent
+            local fullLabel = frame and frame:FindFirstChild("Full")
+            if frame and frame:IsA("Frame") and frame.Visible
+                and fullLabel and fullLabel:IsA("GuiObject") and fullLabel.Visible then
+                return tostring(frame.Name)
+            end
+        end
+    end
+    return nil
+end
+function UI.checkFullBag()
+    if not state.farm or state.closing or UI.bagProcessing then return end
+    local name = UI.findFullBag()
+    if not name then return end
+    UI.bagProcessing = true
+    local root = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
+    local origin = root and root.Position or nil
+    task.defer(function()
+        if state.closing or not state.farm then UI.bagProcessing=false; return end
+        setFarm(false, true)
+        UI.restoreFarmCharacter()
+        UI.coinStatusText.Text = "Bolsa llena: " .. name
+        local roleAtFullBag = UI.getRole(me)
+        if roleAtFullBag == "Murder" then
+            notify("Coin Collector", "Bolsa llena: Sheriff primero, dentro del radio de 1050", C.red)
+            task.spawn(function()
+                if not state.busy and not combatBusy then
+                    UI.runCombat("BagFull", nil, origin)
+                end
+                UI.bagProcessing = false
+            end)
+        elseif roleAtFullBag == "Sheriff" then
+            -- V90: un Sheriff con bolsa llena utiliza la misma rutina de
+            -- Kill Murder (AutoShot + KnifeNo, seguimiento y regreso) de OP.
+            -- Evitar el respawn que antes se ejecutaba en el `else` genérico.
+            notify("Coin Collector", "Bolsa llena: buscando al Murder con Gun", C.sheriff)
+            task.spawn(function()
+                local deadline = os.clock() + 1.5
+                while (state.busy or combatBusy) and os.clock() < deadline
+                    and not state.closing and UI.getRole(me) == "Sheriff" do
+                    task.wait(0.08)
+                end
+                if not state.closing and UI.getRole(me) == "Sheriff" then
+                    if UI.runKillMurderOnce then
+                        UI.runKillMurderOnce()
+                    else
+                        notify("Coin Collector", "Kill Murder todavía no está disponible", C.orange)
+                    end
+                end
+                UI.bagProcessing = false
+            end)
+        else
+            notify("Coin Collector", "Bolsa llena: reiniciando personaje", C.orange)
+            UI.resumeFarmAfterRespawn = true
+            UI.ignoreOldBagGui = true
+            table.clear(UI.bagLatest)
+            local character = me.Character
+            local hum = character and character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                hum.Health = 0
+            else
+                UI.resumeFarmAfterRespawn = false
+            end
+            UI.bagProcessing = false
+        end
+    end)
+end
+
+task.spawn(function()
+    local remotes = ReplicatedStorage:WaitForChild("Remotes", 20)
+    local gameplay = remotes and remotes:WaitForChild("Gameplay", 20)
+    if gameplay and not state.closing then
+        local collected = gameplay:WaitForChild("CoinCollected", 20)
+        local started = gameplay:WaitForChild("CoinsStarted", 20)
+        if started and started:IsA("RemoteEvent") then
+            connect(started.OnClientEvent, function()
+                table.clear(UI.bagLatest)
+                UI.bagProcessing = false
+                UI.ignoreOldBagGui = false
+                visited = {}
+            end)
+        end
+        if collected and collected:IsA("RemoteEvent") then
+            connect(collected.OnClientEvent, function(bagName, amount, capacity)
+                amount, capacity = tonumber(amount), tonumber(capacity)
+                if not amount or not capacity or capacity <= 0 then return end
+                UI.bagLatest[tostring(bagName)] = {amount=amount, capacity=capacity}
+                UI.ignoreOldBagGui = false
+                if state.farm then UI.checkFullBag() end
+            end)
+        end
+    else
+        warn("XONI HUB: Remotes.Gameplay no disponible para detectar bolsa llena")
+    end
+end)
 
 -- AUTOSHOT Y KNIFENO V61
 -- Sin crear variables locales globales adicionales: se encapsula el controlador.
@@ -2892,6 +3463,183 @@ task.spawn(function()
     end
 end)
 
+-- XONI HUB V85 - Kill Murder manual + Auto Kill Murder persistente por rol.
+-- Usa el mismo AutoShot/KnifeNo existente sin crear llamadas remotas adicionales.
+do
+    local activeCycle = false
+    local waitPosition = Vector3.new(-102.85, 237.97, 9009.20)
+    local function findMurder()
+        local nearest, nearestDistance = nil, math.huge
+        local ownRoot = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
+        if not ownRoot then return nil end
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= me and not state.blacklist[other.UserId] then
+                -- Solo roles detectables por herramientas visibles para el cliente.
+                local role = UI.getStableEspRole(other)
+                local root, human = UI.getTargetRoot(other)
+                if role == "Murder" and root and human and human.Health > 0 then
+                    local distance = (root.Position-ownRoot.Position).Magnitude
+                    if distance < nearestDistance then
+                        nearest, nearestDistance = other, distance
+                    end
+                end
+            end
+        end
+        return nearest
+    end
+    local function setParts(character, originals, enable)
+        if not character then return end
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if enable then
+                    if not originals[part] then
+                        originals[part] = {collision=part.CanCollide, anchored=part.Anchored}
+                    end
+                    part.CanCollide=false
+                    -- No anclar la raíz: KnifeNo y el Humanoid necesitan poder desplazarse.
+                    part.Anchored=false
+                elseif originals[part] then
+                    local before=originals[part]
+                    part.CanCollide=before.collision
+                    part.Anchored=before.anchored
+                end
+            end
+        end
+    end
+    local function executeCycle(singleRun)
+        if activeCycle then return end
+        activeCycle=true
+        local priorShot, priorKnife = state.autoShot, state.knifeNo
+        local character = me.Character
+        local root=character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+        local originalCollision={}
+        local originalPlatform=humanoid and humanoid.PlatformStand
+        local originalAutoRotate=humanoid and humanoid.AutoRotate
+        local originalRotation=root and root.CFrame.Rotation
+        local lastTarget=nil
+        if not root or not humanoid or humanoid.Health <= 0 then
+            activeCycle=false
+            return
+        end
+        -- Si estábamos farmeando, pausar físicamente antes de perseguir.
+        UI.suspendFarm()
+        if not priorShot then UI.setAutoShot(true, true) end
+        if not priorKnife then UI.setKnifeNo(true, true) end
+        local ok,err=pcall(function()
+            while (singleRun or state.autoKillMurder) and not state.closing and gui.Parent
+                and me.Character==character and humanoid.Health>0 and UI.getRole(me)=="Sheriff" do
+                if combatBusy or state.busy then
+                    task.wait(.12)
+                    continue
+                end
+                local murderer=findMurder()
+                if not murderer then
+                    if singleRun then
+                        notify("Kill Murder", "No se detectó un Murder disponible", C.orange)
+                        break
+                    end
+                    task.wait(.2)
+                    continue
+                end
+                lastTarget=murderer
+                -- Durante 1 segundo permanecer delante, cerca del suelo, inclinado 90 grados.
+                setParts(character,originalCollision,true)
+                local followStart=os.clock()
+                while os.clock()-followStart<1 and (singleRun or state.autoKillMurder) and not state.closing and not state.busy and not combatBusy do
+                    if me.Character~=character or humanoid.Health<=0 or UI.getRole(me)~="Sheriff"
+                        or state.blacklist[murderer.UserId] then break end
+                    local targetRoot,targetHum=UI.getTargetRoot(murderer)
+                    if not targetRoot or not targetHum or targetHum.Health<=0
+                        or UI.getStableEspRole(murderer)~="Murder" then break end
+                    -- V86: un poco por encima y DETRÁS de la cabeza, no delante del cuerpo.
+                    -- Usar la cabeza real evita errores con R6/R15 y distintas estaturas.
+                    local head=murderer.Character and murderer.Character:FindFirstChild("Head")
+                    local headPosition=(head and head:IsA("BasePart"))
+                        and head.Position or (targetRoot.Position + Vector3.new(0,2.5,0))
+                    local behind=-targetRoot.CFrame.LookVector*1.35
+                    local above=Vector3.new(0,.7,0)
+                    local destinationPosition=headPosition+behind+above
+                    -- Mantener la orientacion mirando a la cabeza para no disparar al vacío.
+                    -- La comprobación de línea de visión y el acierto siguen dependiendo
+                    -- de la Gun y de las validaciones del juego.
+                    local destination=CFrame.lookAt(destinationPosition,headPosition)
+                    root.CFrame=destination
+                    root.AssemblyLinearVelocity=Vector3.zero
+                    root.AssemblyAngularVelocity=Vector3.zero
+                    task.wait(.035)
+                end
+                if (not singleRun and not state.autoKillMurder) or me.Character~=character or humanoid.Health<=0 then break end
+                -- Escapar una sola vez por ciclo; dejar de mover al objetivo.
+                setParts(character,originalCollision,false)
+                humanoid.PlatformStand=false
+                humanoid.AutoRotate=true
+                root.CFrame=CFrame.new(waitPosition)*originalRotation
+                root.AssemblyLinearVelocity=Vector3.zero
+                root.AssemblyAngularVelocity=Vector3.zero
+                local retreatStart=os.clock()
+                while os.clock()-retreatStart<1.5 and (singleRun or state.autoKillMurder) and not state.closing do
+                    if me.Character~=character or humanoid.Health<=0 or UI.getRole(me)~="Sheriff" then break end
+                    if lastTarget then
+                        local tr,th=UI.getTargetRoot(lastTarget)
+                        if not tr or not th or th.Health<=0 then break end
+                    end
+                    task.wait(.08)
+                end
+                -- Kill Murder manual ejecuta una sola ida y regreso.
+                if singleRun then break end
+            end
+        end)
+        if character.Parent then
+            setParts(character,originalCollision,false)
+            if humanoid.Parent then
+                humanoid.PlatformStand=originalPlatform
+                humanoid.AutoRotate=originalAutoRotate
+            end
+            if root.Parent then
+                root.AssemblyAngularVelocity=Vector3.zero
+                root.AssemblyLinearVelocity=Vector3.zero
+                -- Asegurar orientación vertical normal sin forzar una posición nueva.
+                root.CFrame=CFrame.new(root.Position)*originalRotation
+            end
+        end
+        if not priorShot then UI.setAutoShot(false, true) end
+        if not priorKnife then UI.setKnifeNo(false, true) end
+        if not ok then warn("XONI HUB Auto Kill Murder: "..tostring(err)) end
+        activeCycle=false
+        -- Nunca apagar el interruptor por morir, reaparecer o cambiar de rol.
+        -- Queda armado para la próxima ronda Sheriff.
+    end
+    UI.runKillMurderOnce = function()
+        if activeCycle or state.busy or combatBusy then
+            notify("Kill Murder", "Hay otra acción en curso", C.orange)
+            return
+        end
+        if UI.getRole(me) ~= "Sheriff" then
+            notify("Kill Murder", "Esta acción requiere ser Sheriff", C.orange)
+            return
+        end
+        executeCycle(true)
+    end
+    -- Kill Murder ya está conectado desde actionOption; no invocar UI.bindActionButton antes de su definición.
+    task.spawn(function()
+        local lastRole = nil
+        while gui.Parent and not state.closing do
+            local role = UI.getRole(me)
+            if role ~= lastRole then
+                lastRole = role
+                if state.autoKillMurder and role == "Sheriff" then
+                    notify("Auto Kill Murder", "Sheriff detectado: iniciando seguimiento", C.sheriff)
+                end
+            end
+            if state.autoKillMurder and not activeCycle and role == "Sheriff" then
+                executeCycle(false)
+            end
+            task.wait(.14)
+        end
+    end)
+end
+
 -- Auto Kill All: solo cuando el rol propio es Murder; Kill All ya ordena al Sheriff primero.
 -- Un cooldown evita intentos consecutivos en el mismo frame y deja que Coin Collector se reanude.
 task.spawn(function()
@@ -3208,7 +3956,7 @@ task.spawn(function()
             else
                 local gun = UI.gunPart()
                 if gun then
-                    if gun ~= gunLastSeen and os.clock() >= gunCooldownUntil and not state.busy then
+                    if gun ~= gunLastSeen and os.clock() >= gunCooldownUntil and not state.busy and not state.autoKillMurder then
                         gunLastSeen = gun
                         gunCooldownUntil = os.clock() + 2
                         UI.collectGun(gun)
@@ -3227,8 +3975,8 @@ end)
 
 task.spawn(function()
     while not state.closing and gui.Parent do
-        if state.farm and state.busy then
-            UI.coinStatusText.Text="Pausado: acción prioritaria"
+        if state.farm and (state.busy or state.autoKillMurder) then
+            UI.coinStatusText.Text="Pausado: Auto Kill Murder"
             task.wait(0.12)
         elseif state.farm and #Players:GetPlayers() <= 3 then
             state.farm = false
@@ -3237,7 +3985,10 @@ task.spawn(function()
             UI.restoreFarmCharacter()
             notify("Coin Collector", "No tienes requisitos necesarios", C.orange)
         end
-        if state.farm and not state.busy then
+        if state.farm and not state.busy and not state.autoKillMurder then
+            UI.checkFullBag()
+        end
+        if state.farm and not state.busy and not state.autoKillMurder then
             local root = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
             if root then
                 if UI.dodgeNearbyMurder() then
@@ -3264,20 +4015,29 @@ task.spawn(function()
                         state.coinMoving=false
                     elseif hasUnsafe then
                         UI.coinStatusText.Text="Evitando coins cerca del Murder • buscando moneda segura"
-                        UI.idleEvasion()
-                        task.wait(0.2)
+                        -- Si no hay ninguna coin segura, esperar sin volver a
+                        -- recorrer coins peligrosas; el escape sigue vigilando.
+                        -- Durante la espera en el vector, no restaurar fisica:
+                        -- hacerlo liberaria el HRP y caeriamos al vacio.
+                        if not UI.coinStandby and savedParts then UI.restoreFarmCharacter() end
+                        UI.waitFarmResponsive(0.15)
                     else
-                        UI.coinStatusText.Text="Agarrando coins • esperando nuevas monedas"
-                        UI.idleEvasion()
-                        task.wait(0.35)
+                        -- Solo ir al punto de espera si está dentro de 400 studs.
+                        -- Si está más lejos, esperar en el lugar y seguir buscando.
+                        -- No soltar el anclaje mientras el punto de espera esta activo.
+                        -- goToCoinStandby valida y mantiene el estado ella misma.
+                        if not UI.coinStandby and (runningTween or savedParts) then
+                            UI.restoreFarmCharacter()
+                        end
+                        UI.goToCoinStandby()
                     end
                 end
             else
                 UI.coinStatusText.Text = "Esperando personaje..."
-                task.wait(0.35)
+                UI.waitFarmResponsive(0.35)
             end
         else
-            if not state.busy then UI.restoreFarmCharacter() end
+            if not state.busy and not state.autoKillMurder then UI.restoreFarmCharacter() end
             if not state.farm then UI.coinStatusText.Text="Coin Collector desactivado" end
             task.wait(0.25)
         end
@@ -3425,7 +4185,10 @@ connect(RunService.Heartbeat,function(dt)
     local char = me.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if state.noclip and not state.farm and not state.busy and char then
+    if state.farm then
+        -- La postura anclada se mantiene también durante la pausa entre coins.
+        -- No borrar noclipOriginal ni forzar colisiones en mitad de un tween.
+    elseif state.noclip and not state.busy and char then
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if noclipOriginal[part] == nil then noclipOriginal[part] = part.CanCollide end
@@ -3513,7 +4276,7 @@ task.spawn(function()
         local saved=data.enabledOptions
         local options={
             murder=setMurder,sheriff=setSheriff,innocents=setInnocents,
-            autoKillAll=UI.setAutoKillAll,killAura=UI.setKillAura,autoShot=UI.setAutoShot,knifeNo=UI.setKnifeNo,antiAfk=UI.setAntiAfk,
+            autoKillMurder=UI.setAutoKillMurder,autoKillAll=UI.setAutoKillAll,killAura=UI.setKillAura,autoShot=UI.setAutoShot,knifeNo=UI.setKnifeNo,antiAfk=UI.setAntiAfk,
             gunEsp=setGunEsp,autoGun=setAutoGun,aim=setAim,
             noclip=setNoclip,infiniteJump=setInfiniteJump,
             flying=setFly,fastMove=setFastMove,
@@ -3562,6 +4325,8 @@ do
         {id="Fly", title="Fly", toggle=function() setFly(not state.flying) end, active=function() return state.flying end},
         {id="Speed", title="Velocidad", toggle=function() setFastMove(not state.fastMove) end, active=function() return state.fastMove end},
         {id="KillAura", title="KILL AURA", toggle=function() UI.setKillAura(not state.killAura) end, active=function() return state.killAura end},
+        {id="KillMurder", title="Kill Murder", toggle=function() task.spawn(function() if UI.runKillMurderOnce then UI.runKillMurderOnce() end end) end},
+        {id="AutoKillMurder", title="Auto Kill Murder", toggle=function() UI.setAutoKillMurder(not state.autoKillMurder) end, active=function() return state.autoKillMurder end},
         {id="AutoShot", title="AutoShot", toggle=function() UI.setAutoShot(not state.autoShot) end, active=function() return state.autoShot end},
         {id="KnifeNo", title="KnifeNo", toggle=function() UI.setKnifeNo(not state.knifeNo) end, active=function() return state.knifeNo end},
         {id="KillAll", title="Kill All", toggle=function() task.spawn(function() UI.runCombat("All") end) end},
@@ -3636,7 +4401,7 @@ do
         dock.Visible=false -- Cada acceso táctil es ahora un botón independiente.
     end
     -- Vincula cada opción al título real mostrado en su tarjeta.
-    local titleMap={KillAura="KILL AURA",AutoShot="AutoShot",KnifeNo="KnifeNo",Aim="FOV Circle + Aim",Jump="Infinite Jump",Speed="Velocidad",AimWall="Wallcheck",Notif="Notificaciones",Sound="Sonidos"}
+    local titleMap={AutoKillMurder="Auto Kill Murder",KillAura="KILL AURA",AutoShot="AutoShot",KnifeNo="KnifeNo",Aim="FOV Circle + Aim",Jump="Infinite Jump",Speed="Velocidad",AimWall="Wallcheck",Notif="Notificaciones",Sound="Sonidos"}
     for i,entry in ipairs(shortcuts) do
         local cardTitle=titleMap[entry.id] or entry.title
         local host=UI.inlineShortcutCards[cardTitle]
@@ -3824,7 +4589,7 @@ local languages = {
         ["Estado de la ronda."]="Round status.",["Cantidad de jugadores en este servidor."]="Number of players in this server.",
         ["Coin Collector, ESP y AutoCatchGun."]="Coin Collector, ESP and AutoCatchGun.",
         ["ESPERANDO"]="WAITING",["Estado: esperando activación"]="Status: waiting for activation",
-        ["Recolecta caramelos, recupera tu movimiento normal y continúa con el siguiente."]="Collects coins, restores normal movement and continues.",
+        ["Recolecta monedas girado 90 grados, sin Noclip ni cambios de postura entre coins."]="Collects coins, restores normal movement and continues.",
         ["Aim"]="Aim",["AIM"]="AIM",["Seguimiento visual con FOV y objetivos según tu rol."]="Visual aiming with FOV and role-based targets.",
         ["Círculo y seguimiento suave del cuerpo al estar dentro del FOV."]="FOV circle and smooth tracking for targets inside it.",
         ["Activado: solo apunta a personajes sin obstáculos. Desactivado: no filtra paredes."]="Enabled: only targets visible characters. Disabled: ignores walls.",
@@ -3887,7 +4652,7 @@ local languages = {
         ["Cantidad de jugadores en este servidor."]="Número de jogadores neste servidor.",
         ["Coin Collector, ESP y AutoCatchGun."]="Coin Collector, ESP e AutoCatchGun.",
         ["ESPERANDO"]="AGUARDANDO",["Estado: esperando activación"]="Status: aguardando ativação",
-        ["Recolecta caramelos, recupera tu movimiento normal y continúa con el siguiente."]="Coleta moedas, recupera o movimento normal e continua.",
+        ["Recolecta monedas girado 90 grados, sin Noclip ni cambios de postura entre coins."]="Coleta moedas, recupera o movimento normal e continua.",
         ["Seguimiento visual con FOV y objetivos según tu rol."]="Mira assistida com FOV e alvos de acordo com sua função.",
         ["Círculo y seguimiento suave del cuerpo al estar dentro del FOV."]="Círculo FOV e rastreamento suave de alvos dentro dele.",
         ["Activado: solo apunta a personajes sin obstáculos. Desactivado: no filtra paredes."]="Ativado: apenas alvos visíveis. Desativado: ignora paredes.",
