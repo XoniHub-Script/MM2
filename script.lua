@@ -2297,10 +2297,14 @@ function UI.executeFlingSingle(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
             -- Movimiento original V23: HRP centrado y misma orientacion,
             -- sin los giros ni inclinaciones extra de la V24.
-            -- Una sola ruta para PC, tablet y celular: aplicar la misma
-            -- transformacion al HumanoidRootPart, sin PivotTo tactil.
+            -- Una sola ruta para PC, tablet y celular: usar PivotTo
+            -- alineando el HRP con el HRP del objetivo.
             -- Las restricciones de fisica/red del servidor siguen vigentes.
-            root.CFrame = targetRoot.CFrame
+            -- PivotTo mueve el modelo completo. Conservamos la diferencia
+            -- espacial entre el pivot del personaje y su HRP: de ese modo
+            -- el HRP, no el centro visual del modelo, coincide con el objetivo.
+            local relativePivot = root.CFrame:ToObjectSpace(char:GetPivot())
+            char:PivotTo(targetRoot.CFrame * relativePivot)
             root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
             root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
             RunService.Heartbeat:Wait()
