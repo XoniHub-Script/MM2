@@ -56,6 +56,7 @@ local runningTween = nil
 local visited = {}
 local savedParts = nil
 local roleCache = {} -- [Player] = {role=..., character=...}
+local espRoleGrace = {} -- Evita parpadeos mientras una Tool cambia de Character a Backpack
 local visuals = {}   -- [Player] = {highlight, billboard, label, character, role}
 local currentOwnRole = nil
 local connections = {}
@@ -884,7 +885,7 @@ end)
 -- Inicializacion de settings sin toast
 setNotif(true, true)
 setSound(true, true)
-local setRainbow = option(settingsPage,"M arcoíris","La M cambia de color y el borde del cuadrado puede usar arcoíris.",C.red,function(v)
+local setRainbow = option(settingsPage,"RAINBOW","Activa los colores arcoíris del botón Open Menu.",C.red,function(v)
     config.rainbowLauncher=v
     if not v and UI.launcherStroke then UI.launcherStroke.Color=C.red end
 end)
@@ -1583,8 +1584,36 @@ function UI.roleFromTools(p)
 end
 function UI.getRole(p)
     local role=UI.roleFromTools(p) or "Player"
-    roleCache[p]=role -- Inocente si no hay herramientas ni dato verificado de ronda.
+    roleCache[p]=role -- El rol propio se actualiza inmediatamente.
     return role
+end
+-- Para la parte VISUAL únicamente: pequeñas interrupciones al equipar/desequipar
+-- una Tool no deben hacer desaparecer el ESP en cada actualización.
+function UI.getStableEspRole(p)
+    local detected=UI.getRole(p)
+    if p==me then return detected end
+    local char=p.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    if not char or (hum and hum.Health<=0) then
+        espRoleGrace[p]=nil
+        return detected
+    end
+    local now=os.clock()
+    local previous=espRoleGrace[p]
+    if not previous or previous.character~=char then
+        espRoleGrace[p]={character=char,role=detected,lastSeen=now}
+        return detected
+    end
+    if detected~="Player" then
+        previous.role=detected
+        previous.lastSeen=now
+        return detected
+    end
+    if previous.role~="Player" and now-previous.lastSeen<1.5 then
+        return previous.role
+    end
+    previous.role="Player"
+    return detected
 end
 -- Los mapas pueden usar una Part llamada Lobby o LobbyZone.
 -- El filtro por volumen funciona también si el personaje NO es descendiente del modelo.
@@ -1652,13 +1681,21 @@ function UI.ensureVisual(p, role)
 end
 function UI.refreshEsp()
     for _, p in ipairs(Players:GetPlayers()) do
-        local role = UI.getRole(p)
+        local role = UI.getStableEspRole(p)
         local show = (role == "Murder" and state.murder) or (role == "Sheriff" and state.sheriff)
-            or ((role == nil or role == "Player") and state.innocents and p ~= me)
-        if show and not UI.isInLobby(p) then UI.ensureVisual(p, role or "Player") else UI.cleanVisual(p) end
+            or (role == "Player" and state.innocents and p ~= me)
+        if show and not UI.isInLobby(p) then
+            UI.ensureVisual(p, role)
+        else
+            UI.cleanVisual(p)
+        end
     end
 end
-connect(Players.PlayerRemoving, function(p) UI.cleanVisual(p); roleCache[p] = nil end)
+connect(Players.PlayerRemoving, function(p)
+    UI.cleanVisual(p)
+    roleCache[p] = nil
+    espRoleGrace[p] = nil
+end)
 
 function UI.updateOwnRole()
     local role = UI.getRole(me)
@@ -2243,6 +2280,8 @@ function UI.executeFlingSingle(targetPlayer)
     local oldHeight = workspace.FallenPartsDestroyHeight
     local animate, animateWasDisabled
     local spin
+    local mobileMode = UIS.TouchEnabled and not UIS.KeyboardEnabled
+    local movedOnMobile = false
     local ok, err = pcall(function()
         pcall(function() workspace.FallenPartsDestroyHeight = 0/0 end)
         root.Anchored = false
@@ -2260,10 +2299,22 @@ function UI.executeFlingSingle(targetPlayer)
             if not targetRoot or not root.Parent or state.blacklist[targetPlayer.UserId] then break end
             -- Movimiento original V23: HRP centrado y misma orientacion,
             -- sin los giros ni inclinaciones extra de la V24.
-            root.CFrame = targetRoot.CFrame
-            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-            root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
+            if mobileMode then
+                -- En tactil el Character puede volver a su posicion anterior
+                -- si se actualiza solo el CFrame del HRP.
+                char:PivotTo(targetRoot.CFrame)
+                -- Evitar magnitudes no representables durante la correccion del rig.
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            else
+                root.CFrame = targetRoot.CFrame
+                root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
+                root.AssemblyAngularVelocity = Vector3.new(9e20, 9e20, 9e20)
+            end
             RunService.Heartbeat:Wait()
+            if mobileMode and root.Parent and (root.Position-targetRoot.Position).Magnitude<=12 then
+                movedOnMobile=true
+            end
         end
     end)
     -- Limpieza siempre, incluso si ocurre un error durante el movimiento.
@@ -2286,6 +2337,10 @@ function UI.executeFlingSingle(targetPlayer)
     state.busy = false
     flingBusy = false
     if not ok then warn("XONI HUB FLING: " .. tostring(err)) end
+    if mobileMode and ok and not movedOnMobile then
+        notify("Fling", "El movimiento fue bloqueado o revertido. Puede requerir control del servidor.", C.orange)
+        return false
+    end
     return ok
 end
 
@@ -3212,7 +3267,7 @@ local languages = {
         ["Configuración"]="Settings", ["Preferencias visuales y de avisos."]="Visual and notification preferences.",
         ["Notificaciones"]="Notifications",["Muestra avisos en la esquina inferior derecha."]="Displays notifications in the bottom-right corner.",
         ["Sonidos"]="Sounds",["Reproduce un pequeño sonido de aviso y clic."]="Plays a short alert and click sound.",
-        ["M arcoíris"]="Rainbow M",["La M cambia de color y el borde del cuadrado puede usar arcoíris."]="The M and its outline cycle through rainbow colors.",
+        ["RAINBOW"]="RAINBOW",["Activa los colores arcoíris del botón Open Menu."]="Enables rainbow colors on the Open Menu button.",
         ["TEMAS Y COLORES"]="THEMES AND COLORS",["Temas y colores"]="Themes and colors",
         ["TRANSPARENCIA DEL PANEL"]="PANEL TRANSPARENCY",["Transparencia del panel"]="Panel transparency",
         ["SAVE CONFIG"]="SAVE CONFIG",["4 segundos"]="4 seconds",["6 segundos"]="6 seconds",["8 segundos"]="8 seconds",
@@ -3271,7 +3326,7 @@ local languages = {
         ["Preferencias visuales y de avisos."]="Preferências visuais e de notificações.",
         ["Notificaciones"]="Notificações",["Muestra avisos en la esquina inferior derecha."]="Exibe avisos no canto inferior direito.",
         ["Sonidos"]="Sons",["Reproduce un pequeño sonido de aviso y clic."]="Reproduz um som curto de aviso e clique.",
-        ["M arcoíris"]="M arco-íris",["La M cambia de color y el borde del cuadrado puede usar arcoíris."]="O M e sua borda mudam em cores de arco-íris.",
+        ["RAINBOW"]="RAINBOW",["Activa los colores arcoíris del botón Open Menu."]="Ativa as cores arco-íris do botão Open Menu.",
         ["TEMAS Y COLORES"]="TEMAS E CORES",["Temas y colores"]="Temas e cores",
         ["TRANSPARENCIA DEL PANEL"]="TRANSPARÊNCIA DO PAINEL",["Transparencia del panel"]="Transparência do painel",
         ["4 segundos"]="4 segundos",["6 segundos"]="6 segundos",["8 segundos"]="8 segundos",
@@ -3523,7 +3578,7 @@ for _,choice in ipairs(choices) do
         notify("Panel cargado","Dashboard listo",C.mint)
     end)
 end
-text(welcome,"XONI HUB  •  V33",10,C.muted,true,{
+text(welcome,"XONI HUB  •  V32",10,C.muted,true,{
     Position=UDim2.fromOffset(20,239),Size=UDim2.new(1,-40,0,20),
     TextXAlignment=Enum.TextXAlignment.Center,ZIndex=201
 })
