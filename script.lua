@@ -1,3 +1,4 @@
+-- XONI HUB V61 - KNIFENO proyectiles predictivos + AUTOSHOT Gun inventario
 -- XONI HUB V53 - Alineacion de HRP comprobada / offset de pivote fijo
 -- XONI HUB V51 | Evita autoimpulso del personaje en dispositivos tactiles
 -- Murder vs Sheriff | XONI HUB V13 - GUI CARBON / RED (LocalScript)
@@ -51,8 +52,8 @@ local C = {
 
 }
 
-local config = { rainbowLauncher = true, targetCollapsed = false, maxCoinDistance = 6000, coinSpeed = 40, notify = true, sounds = true, maxKillDistance = 5000, toastDuration = 4.3, scale = 1, theme = "Rojo", animations = true, playerSpeed = 20, flySpeed = 36, aimFov = 185, aimSmooth = 40, aimWallcheck = false, aimbot = false, autoSave = true, panelTransparency = 0, hotkeys = {}, onScreen = {} }
-local state = { antiAfk = false, autoKillAll = false, targetUserId = nil, blacklist = {}, farm = false, murder = false, sheriff = false, autoGun = false, gunEsp = false, innocents = false, noclip = false, infiniteJump = false, fastMove = false, flying = false, busy = false, aim = false, open = true, min = false, closing = false }
+local config = { rainbowLauncher = true, targetCollapsed = false, maxCoinDistance = 6000, coinSpeed = 40, notify = true, sounds = true, maxKillDistance = 5000, auraRadius = 25, toastDuration = 4.3, scale = 1, theme = "Rojo", animations = true, playerSpeed = 20, flySpeed = 36, aimFov = 185, aimSmooth = 40, aimWallcheck = false, aimbot = false, autoSave = true, panelTransparency = 0, hotkeys = {}, onScreen = {} }
+local state = { antiAfk = false, autoKillAll = false, killAura = false, autoShot = false, knifeNo = false, targetUserId = nil, blacklist = {}, farm = false, murder = false, sheriff = false, autoGun = false, gunEsp = false, innocents = false, noclip = false, infiniteJump = false, fastMove = false, flying = false, busy = false, aim = false, open = true, min = false, closing = false }
 local runningTween = nil
 local visited = {}
 local savedParts = nil
@@ -609,6 +610,62 @@ end)
 local setAutoGun = option(opPage, "AutoCatchGun", "Busca la Gun Drop y regresa automáticamente.", C.mint, function(v) state.autoGun = v; gunLastSeen = nil end)
 local killSheriffButton = actionOption(opPage, "Kill Sheriff", "Acción con Knife sobre el Sheriff, cuando está disponible.", C.red, function() end)
 local killAllButton = actionOption(opPage, "Kill All", "Excluye Murder y jugadores en blacklist.", C.purple, function() end)
+-- Kill Aura: área configurable y límite visual en el suelo.
+UI.setKillAura = option(opPage, "KILL AURA", "Ataca con Knife a objetivos que entran en el área. Respeta Blacklist.", C.red, function(v)
+    state.killAura = v
+    if not v and UI.clearAuraVisual then UI.clearAuraVisual() end
+end)
+do
+    local box = card(opPage, 84)
+    registerSearch(box, "kill aura rango distancia radio circulo", "Radio Kill Aura")
+    text(box, "RADIO KILL AURA", 11, C.ink, true, {Position=UDim2.fromOffset(12,4),Size=UDim2.new(1,-108,0,22)})
+    UI.auraRadiusLabel = text(box, tostring(config.auraRadius).." studs", 11, C.white, true, {Position=UDim2.new(1,-112,0,4),Size=UDim2.fromOffset(101,22),TextXAlignment=Enum.TextXAlignment.Right})
+    local track = new("Frame",box,{Position=UDim2.new(0,20,0,53),Size=UDim2.new(1,-40,0,7),BackgroundColor3=C.white,BorderSizePixel=0,Active=true})
+    round(track,8)
+    local fill = new("Frame",track,{BackgroundColor3=C.white,BorderSizePixel=0,Size=UDim2.fromScale(0,1)})
+    round(fill,8)
+    local knob = new("TextButton",track,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(0,.5),Size=UDim2.fromOffset(18,18),BackgroundColor3=C.white,Text="",BorderSizePixel=0,AutoButtonColor=false})
+    round(knob,20)
+    -- No dejar que los cambios de tema transformen estas piezas blancas en paneles oscuros.
+    for _, sliderPart in ipairs({track,fill,knob}) do sliderPart:SetAttribute("XoniAlwaysWhite",true) end
+    UI.auraWhiteSlider={track=track,fill=fill,knob=knob}
+    local holding=false
+    UI.refreshAuraSlider=function()
+        config.auraRadius=math.clamp(math.floor(config.auraRadius+0.5),5,120)
+        local f=(config.auraRadius-5)/115
+        fill.Size=UDim2.fromScale(f,1)
+        knob.Position=UDim2.fromScale(f,.5)
+        UI.auraRadiusLabel.Text=tostring(config.auraRadius).." studs"
+    end
+    local function fromPointer(x)
+        config.auraRadius=5+115*math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
+        UI.refreshAuraSlider()
+    end
+    for _,control in ipairs({track,knob}) do
+        connect(control.InputBegan,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+                holding=true;fromPointer(input.Position.X)
+            end
+        end)
+    end
+    connect(UIS.InputChanged,function(input)
+        if holding and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
+            fromPointer(input.Position.X)
+        end
+    end)
+    connect(UIS.InputEnded,function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then holding=false end
+    end)
+    UI.refreshAuraSlider()
+end
+-- AutoShot sólo para Sheriff con Gun EQUIPADA. El servidor decide si el disparo es válido.
+UI.setAutoShot = option(opPage, "AutoShot", "Si sos Sheriff, equipa Gun del inventario y dispara solo al Murder visible.", C.sheriff, function(v)
+    state.autoShot=v
+end)
+-- Esquiva local de proyectiles TrailPart, si el terreno permite desplazarse.
+UI.setKnifeNo = option(opPage, "KnifeNo", "Predice cuchillos TrailPart y esquiva sus trayectorias cuando existe un camino libre.", C.mint, function(v)
+    state.knifeNo=v
+end)
 UI.setAutoKillAll = option(opPage, "Auto Kill All", "Cuando tu rol sea Murder, prioriza Sheriff y ejecuta Kill All automáticamente. Pausa Coin Collector mientras actúa.", C.red, function(v)
     state.autoKillAll = v
 end)
@@ -925,6 +982,7 @@ local function themeToken(color, prop, obj)
     if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then return nil end
     -- Blanco en textos significa blanco fijo, no fondo oscuro.
     if prop == "TextColor3" and color == C.white then return nil end
+    if obj:GetAttribute("XoniAlwaysWhite") then return nil end
     if prop == "BackgroundColor3" and color == C.white then return "surface" end
     for _, token in ipairs({"blue", "dark", "navy", "bg", "ink", "muted", "line"}) do
         if color == sourceColors[token] then return token end
@@ -977,6 +1035,11 @@ local function applyTheme(palette)
                     part.BackgroundTransparency=0
                 end
             end
+        end
+    end
+    if UI.auraWhiteSlider then
+        for _,item in pairs(UI.auraWhiteSlider) do
+            if item and item.Parent then item.BackgroundColor3=Color3.fromRGB(255,255,255);item.BackgroundTransparency=0 end
         end
     end
     if aimOutline and aimOutline.Parent then aimOutline.Color=C.white end
@@ -1183,9 +1246,9 @@ UI.buildConfigPayload=function()
         sounds=config.sounds,rainbowLauncher=config.rainbowLauncher,
         blacklist=ids,playerSpeed=config.playerSpeed,flySpeed=config.flySpeed,
         targetCollapsed=config.targetCollapsed,panelTransparency=config.panelTransparency,
-        aimFov=config.aimFov,aimSmooth=config.aimSmooth,aimWallcheck=config.aimWallcheck,aimbot=config.aimbot,
+        aimFov=config.aimFov,aimSmooth=config.aimSmooth,auraRadius=config.auraRadius,aimWallcheck=config.aimWallcheck,aimbot=config.aimbot,
         hotkeys=config.hotkeys,onScreen=config.onScreen,
-        enabledOptions={farm=state.farm,autoKillAll=state.autoKillAll,antiAfk=state.antiAfk,murder=state.murder,sheriff=state.sheriff,
+        enabledOptions={farm=state.farm,autoKillAll=state.autoKillAll,killAura=state.killAura,autoShot=state.autoShot,knifeNo=state.knifeNo,antiAfk=state.antiAfk,murder=state.murder,sheriff=state.sheriff,
             innocents=state.innocents,gunEsp=state.gunEsp,autoGun=state.autoGun,
             aim=state.aim,noclip=state.noclip,infiniteJump=state.infiniteJump,
             flying=state.flying,fastMove=state.fastMove}
@@ -2082,7 +2145,7 @@ function UI.getTargetRoot(p)
     if root and hum and hum.Health > 0 then return root, hum end
     return nil, nil
 end
-function UI.attackTarget(p, maxDuration)
+function UI.attackTarget(p, maxDuration, auraOrigin)
     local knife = UI.equippedKnife()
     if not knife then
         notify("Sin herramienta", "No tienes los requisitos adecuados", C.orange)
@@ -2096,6 +2159,7 @@ function UI.attackTarget(p, maxDuration)
         if state.blacklist[p.UserId] or UI.getRole(p) == "Murder" or UI.getRole(me) ~= "Murder" then return false end
         local root, hum = UI.getTargetRoot(p)
         if not root or hum.Health <= 0 then return true end
+        if auraOrigin and (not state.killAura or (root.Position - auraOrigin).Magnitude > config.auraRadius) then return false end
         if knife.Parent ~= me.Character then return false end
         -- Detrás de la orientación del objetivo, sin modificar colisiones.
         ownRoot.CFrame = root.CFrame * CFrame.new(0, 0, 0.8) -- V26: acercamiento trasero más pegado
@@ -2127,10 +2191,11 @@ function UI.runCombat(mode, chosenTarget)
     local originalRoot = me.Character and me.Character:FindFirstChild("HumanoidRootPart")
     local originalCFrame = originalRoot and originalRoot.CFrame
     local targets = {}
-    if mode == "Target" then
-        if chosenTarget and chosenTarget ~= me and not state.blacklist[chosenTarget.UserId] and UI.getRole(chosenTarget) ~= "Murder" then
+    if mode == "Target" or mode == "Aura" then
+        if chosenTarget and chosenTarget ~= me and not state.blacklist[chosenTarget.UserId] and UI.getRole(chosenTarget) ~= "Murder"
+            and (mode ~= "Aura" or (UI.getTargetRoot(chosenTarget) and originalRoot and (UI.getTargetRoot(chosenTarget).Position - originalRoot.Position).Magnitude <= config.auraRadius)) then
             targets[1]=chosenTarget
-        else
+        elseif mode ~= "Aura" then
             notify("Kill Target","Objetivo no disponible o excluido",C.orange)
         end
     elseif mode == "Sheriff" then
@@ -2159,10 +2224,12 @@ function UI.runCombat(mode, chosenTarget)
         if state.closing or not UI.validMurder() then break end
         local root = UI.getTargetRoot(p)
         if root and originalRoot and not state.blacklist[p.UserId] and UI.getRole(p) ~= "Murder"
-            and (mode == "Target" or (root.Position - originalRoot.Position).Magnitude <= config.maxKillDistance) then
+            and (mode == "Target"
+                or (mode == "Aura" and (root.Position - originalRoot.Position).Magnitude <= config.auraRadius)
+                or (mode ~= "Aura" and (root.Position - originalRoot.Position).Magnitude <= config.maxKillDistance)) then
             -- Sigue al objetivo mientras esté vivo hasta un límite de seguridad.
             if UI.getRole(p) ~= "Murder" then
-                UI.attackTarget(p, mode == "Sheriff" and 20 or mode == "Target" and 15 or 8)
+                UI.attackTarget(p, mode == "Aura" and 0.45 or mode == "Sheriff" and 20 or mode == "Target" and 15 or 8, mode == "Aura" and originalCFrame.Position or nil)
             end
         end
     end
@@ -2173,7 +2240,324 @@ function UI.runCombat(mode, chosenTarget)
     end
     combatBusy = false
     state.busy = false
-    if #targets > 0 then notify("Acción finalizada", "Se completó el recorrido de objetivos", C.mint) end
+    if #targets > 0 and mode ~= "Aura" then notify("Acción finalizada", "Se completó el recorrido de objetivos", C.mint) end
+end
+
+-- AUTOSHOT Y KNIFENO V61
+-- Sin crear variables locales globales adicionales: se encapsula el controlador.
+do
+    local dodger = {
+        projectiles = {}, samples = setmetatable({}, {__mode="k"}),
+        nextShot = 0, nextDodge = 0, nextPrune = 0, dodgeUntil = 0,
+        currentDodge = Vector3.zero
+    }
+
+    local function rememberProjectile(object)
+        if object:IsA("BasePart") and object.Name == "TrailPart" then
+            dodger.projectiles[object] = true
+        end
+    end
+    for _, object in ipairs(workspace:GetDescendants()) do
+        rememberProjectile(object)
+    end
+    connect(workspace.DescendantAdded, rememberProjectile)
+    connect(workspace.DescendantRemoving, function(object)
+        if dodger.projectiles[object] then
+            dodger.projectiles[object] = nil
+            dodger.samples[object] = nil
+        end
+    end)
+
+    local function getEquippedGun()
+        local char = me.Character
+        local gun = char and char:FindFirstChild("Gun")
+        if gun and gun:IsA("Tool") and gun:FindFirstChild("Shoot")
+            and gun.Shoot:IsA("RemoteEvent") then
+            return gun, char
+        end
+        return nil, char
+    end
+
+    local function bestVisibleMurder(origin, char)
+        local bestPosition = nil
+        local nearest = 150
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {char}
+        params.IgnoreWater = true
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= me and not state.blacklist[player.UserId]
+                and UI.getStableEspRole(player) == "Murder" then
+                local other = player.Character
+                local enemyHum = other and other:FindFirstChildOfClass("Humanoid")
+                local body = other and (other:FindFirstChild("Body")
+                    or other:FindFirstChild("UpperTorso")
+                    or other:FindFirstChild("Torso")
+                    or other:FindFirstChild("HumanoidRootPart")
+                    or other:FindFirstChild("Head"))
+                if enemyHum and enemyHum.Health > 0 and body and body:IsA("BasePart") then
+                    local delta = body.Position - origin
+                    local dist = delta.Magnitude
+                    if dist > .1 and dist < nearest then
+                        local hit = workspace:Raycast(origin, delta, params)
+                        if hit and hit.Instance:IsDescendantOf(other) then
+                            nearest = dist
+                            bestPosition = body.Position
+                        end
+                    end
+                end
+            end
+        end
+        return bestPosition
+    end
+
+    local function shootMurder()
+        if not state.autoShot or state.closing or combatBusy or state.busy then return end
+        if UI.getRole(me) ~= "Sheriff" then return end
+        local char = me.Character
+        local human = char and char:FindFirstChildOfClass("Humanoid")
+        if not (char and human and human.Health > 0) then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        -- Buscar al Murder ANTES de equipar para no sacar Gun cuando no hay disparo válido.
+        local tool, equippedChar = getEquippedGun()
+        local stored = me:FindFirstChildOfClass("Backpack")
+        local inventoryGun = stored and stored:FindFirstChild("Gun")
+        if not tool and not (inventoryGun and inventoryGun:IsA("Tool")) then return end
+        local provisional = root:FindFirstChild("GunRaycastAttachment")
+        local originPos = provisional and provisional:IsA("Attachment")
+            and provisional.WorldPosition or root.Position
+        if not bestVisibleMurder(originPos, char) then return end
+
+        if not tool then
+            human:EquipTool(inventoryGun)
+            -- Esperar al siguiente ciclo para que Handle/Attachment se actualicen.
+            dodger.nextShot = os.clock() + .16
+            return
+        end
+
+        local att = root:FindFirstChild("GunRaycastAttachment")
+        local handle = tool:FindFirstChild("Handle")
+        local origin = (att and att:IsA("Attachment") and att.WorldCFrame)
+            or (handle and handle:IsA("BasePart") and handle.CFrame)
+            or root.CFrame
+        local target = bestVisibleMurder(origin.Position, char)
+        if not target then return end
+        local shoot = tool:FindFirstChild("Shoot")
+        if not (shoot and shoot:IsA("RemoteEvent")) then return end
+        shoot:FireServer(origin, CFrame.lookAt(target, target + origin.LookVector))
+        dodger.nextShot = os.clock() + .48
+    end
+
+    local function clearFlightMovement()
+        dodger.dodgeUntil = 0
+        dodger.currentDodge = Vector3.zero
+    end
+
+    local function dodgeTrailParts()
+        if not state.knifeNo or state.closing or state.busy or combatBusy then
+            clearFlightMovement()
+            return
+        end
+        local char = me.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local human = char and char:FindFirstChildOfClass("Humanoid")
+        if not (root and human and human.Health > 0) or root.Anchored then
+            clearFlightMovement()
+            return
+        end
+
+        local now = os.clock()
+        local ownVelocity = root.AssemblyLinearVelocity
+        local hazards = {}
+        local charPos = root.Position
+        for trail in pairs(dodger.projectiles) do
+            if not trail.Parent then
+                dodger.projectiles[trail] = nil
+            elseif not trail:IsDescendantOf(char) then
+                local displacement = trail.Position-charPos
+                if displacement.Magnitude <= 55 then
+                    local previous = dodger.samples[trail]
+                    local speed = trail.AssemblyLinearVelocity
+                    -- Varios cuchillos animados desplazan TrailPart por CFrame y no por física.
+                    if previous then
+                        local dt = now-previous.time
+                        if dt > .008 and dt < .4 then
+                            local measured = (trail.Position-previous.pos)/dt
+                            if measured.Magnitude > speed.Magnitude + 8 then speed = measured end
+                        end
+                    end
+                    dodger.samples[trail] = {pos=trail.Position, time=now}
+                    local relative = speed-ownVelocity
+                    local speed2 = relative:Dot(relative)
+                    if speed2 > 64 then
+                        local toward = charPos-trail.Position
+                        local approach = toward:Dot(relative)
+                        local timeToNear = math.clamp(approach/speed2, 0, .55)
+                        local predicted = trail.Position+relative*timeToNear
+                        -- Considerar radio del cuerpo/accesorios, no solo centro HRP.
+                        local lateral = (predicted-charPos).Magnitude
+                        if approach > 0 and timeToNear < .5 and lateral < 7 then
+                            hazards[#hazards+1] = {
+                                position=trail.Position, velocity=relative,
+                                predicted=predicted, eta=timeToNear
+                            }
+                        end
+                    end
+                else
+                    dodger.samples[trail] = nil
+                end
+            end
+        end
+        if #hazards == 0 then
+            if now >= dodger.dodgeUntil then clearFlightMovement() end
+            return
+        end
+
+        local right = Vector3.new(root.CFrame.RightVector.X,0,root.CFrame.RightVector.Z)
+        local forward = Vector3.new(root.CFrame.LookVector.X,0,root.CFrame.LookVector.Z)
+        if right.Magnitude < .01 or forward.Magnitude < .01 then return end
+        right = right.Unit
+        forward = forward.Unit
+        local choices = {right,-right,forward,-forward,(right+forward).Unit,
+            (right-forward).Unit,(-right+forward).Unit,(-right-forward).Unit}
+        local bestDirection, bestScore = nil, -math.huge
+        local ray = RaycastParams.new()
+        ray.FilterType = Enum.RaycastFilterType.Exclude
+        ray.FilterDescendantsInstances = {char}
+        ray.IgnoreWater = true
+        for _, dir in ipairs(choices) do
+            local target = charPos+dir*8
+            -- Una pared en el costado o un pozo impiden esa ruta de esquiva.
+            local hit = workspace:Raycast(charPos, dir*8, ray)
+            local ground = workspace:Raycast(target+Vector3.new(0,3,0), Vector3.new(0,-12,0), ray)
+            if not hit and ground then
+                local minimumDistance = math.huge
+                for _, hazard in ipairs(hazards) do
+                    -- Puntuación: punto de máximo acercamiento de cada trayectoria.
+                    local future = hazard.position + hazard.velocity*hazard.eta
+                    minimumDistance = math.min(minimumDistance,(target-future).Magnitude)
+                end
+                if minimumDistance > bestScore then
+                    bestScore, bestDirection = minimumDistance, dir
+                end
+            end
+        end
+        if not bestDirection then return end
+        -- Impulso lateral moderado solo en el personaje local, sin TP ni anclaje.
+        human:Move(bestDirection, false)
+        local horizontal = bestDirection*math.max(27,human.WalkSpeed+14)
+        root.AssemblyLinearVelocity = Vector3.new(horizontal.X,ownVelocity.Y,horizontal.Z)
+        dodger.currentDodge = bestDirection
+        dodger.dodgeUntil = now+.12
+    end
+
+    task.spawn(function()
+        while gui.Parent and not state.closing do
+            task.wait(.045)
+            local now = os.clock()
+            if state.autoShot and now >= dodger.nextShot then
+                dodger.nextShot = now+.48
+                pcall(shootMurder)
+            end
+            if state.knifeNo and now >= dodger.nextDodge then
+                dodger.nextDodge = now+.045
+                pcall(dodgeTrailParts)
+            end
+        end
+    end)
+end
+
+-- Círculo de Kill Aura: solamente visual, sigue al jugador y no colisiona.
+do
+    local ringParts = {}
+    local lastUpdate = 0
+    local originWhileBusy = nil
+    UI.clearAuraVisual = function()
+        for _,p in ipairs(ringParts) do if p.Parent then p:Destroy() end end
+        table.clear(ringParts)
+        originWhileBusy = nil
+    end
+    local function buildRing()
+        if #ringParts>0 then return end
+        for i=1,32 do
+            local part=Instance.new("Part")
+            part.Name="Xoni_KillAura_Ring"
+            part.Anchored=true
+            part.CanCollide=false
+            part.CanTouch=false
+            part.CanQuery=false
+            part.CastShadow=false
+            part.Material=Enum.Material.Neon
+            part.Color=C.red
+            part.Transparency=.15
+            part.Size=Vector3.new(1,.12,.23)
+            part.Parent=workspace
+            ringParts[i]=part
+        end
+    end
+    connect(RunService.Heartbeat,function(dt)
+        if not state.killAura or state.closing then
+            if #ringParts>0 then UI.clearAuraVisual() end
+            return
+        end
+        lastUpdate += dt
+        if lastUpdate<.08 then return end
+        lastUpdate=0
+        local char=me.Character
+        local root=char and char:FindFirstChild("HumanoidRootPart")
+        local hum=char and char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum or hum.Health<=0 then
+            if #ringParts>0 then UI.clearAuraVisual() end
+            return
+        end
+        if not combatBusy then originWhileBusy=root.Position end
+        local origin=originWhileBusy or root.Position
+        local rayParams=RaycastParams.new()
+        rayParams.FilterType=Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances={char}
+        local hit=workspace:Raycast(origin+Vector3.new(0,3,0),Vector3.new(0,-120,0),rayParams)
+        local y=hit and hit.Position.Y+.16 or origin.Y-2.8
+        buildRing()
+        local rad=config.auraRadius
+        local segment=2*math.pi*rad/#ringParts
+        for i,part in ipairs(ringParts) do
+            local theta=(i-.5)*math.pi*2/#ringParts
+            part.Size=Vector3.new(segment+.1,.10,.2)
+            part.CFrame=CFrame.new(origin.X+math.cos(theta)*rad,y,origin.Z+math.sin(theta)*rad)
+                * CFrame.Angles(0,-theta-math.pi/2,0)
+        end
+    end)
+    task.spawn(function()
+        while gui.Parent and not state.closing do
+            task.wait(.35)
+            if state.killAura and not combatBusy and not state.busy and UI.getRole(me)=="Murder" then
+                local own=me.Character
+                local root=own and own:FindFirstChild("HumanoidRootPart")
+                local hum=own and own:FindFirstChildOfClass("Humanoid")
+                if root and hum and hum.Health>0 then
+                    local best=nil
+                    local bestDistance=config.auraRadius
+                    for _,player in ipairs(Players:GetPlayers()) do
+                        if player~=me and not state.blacklist[player.UserId] and UI.getRole(player)~="Murder" then
+                            local theirRoot=UI.getTargetRoot(player)
+                            if theirRoot then
+                                local dist=(theirRoot.Position-root.Position).Magnitude
+                                if dist<=bestDistance then
+                                    best=player
+                                    bestDistance=dist
+                                end
+                            end
+                        end
+                    end
+                    if best and state.killAura then UI.runCombat("Aura",best) end
+                end
+            end
+        end
+        UI.clearAuraVisual()
+    end)
 end
 
 -- V55: detener Fling apenas el objetivo ya fue lanzado; regreso único.
@@ -2995,6 +3379,7 @@ task.spawn(function()
     if type(data.scale)=="number" then config.scale=math.clamp(data.scale,0.25,1.6); UI.scaleText.Text=tostring(math.floor(config.scale*100+0.5)).."%"; updateScale(); syncSizeSlider() end
     if type(data.playerSpeed)=="number" then updateSpeedSlider(data.playerSpeed) end
     if type(data.flySpeed)=="number" then config.flySpeed=math.clamp(data.flySpeed,10,120) end
+    if type(data.auraRadius)=="number" then config.auraRadius=math.clamp(data.auraRadius,5,120);UI.refreshAuraSlider() end
     if type(data.aimFov)=="number" then setAimFov(data.aimFov) end
     if type(data.aimSmooth)=="number" then setAimSmooth(data.aimSmooth) end
     if type(data.aimWallcheck)=="boolean" then setAimWallcheck(data.aimWallcheck,true) end
@@ -3007,7 +3392,7 @@ task.spawn(function()
         local saved=data.enabledOptions
         local options={
             murder=setMurder,sheriff=setSheriff,innocents=setInnocents,
-            autoKillAll=UI.setAutoKillAll,antiAfk=UI.setAntiAfk,
+            autoKillAll=UI.setAutoKillAll,killAura=UI.setKillAura,autoShot=UI.setAutoShot,knifeNo=UI.setKnifeNo,antiAfk=UI.setAntiAfk,
             gunEsp=setGunEsp,autoGun=setAutoGun,aim=setAim,
             noclip=setNoclip,infiniteJump=setInfiniteJump,
             flying=setFly,fastMove=setFastMove,
@@ -3055,6 +3440,9 @@ do
         {id="Jump", title="Infinite Jump", toggle=function() setInfiniteJump(not state.infiniteJump) end, active=function() return state.infiniteJump end},
         {id="Fly", title="Fly", toggle=function() setFly(not state.flying) end, active=function() return state.flying end},
         {id="Speed", title="Velocidad", toggle=function() setFastMove(not state.fastMove) end, active=function() return state.fastMove end},
+        {id="KillAura", title="KILL AURA", toggle=function() UI.setKillAura(not state.killAura) end, active=function() return state.killAura end},
+        {id="AutoShot", title="AutoShot", toggle=function() UI.setAutoShot(not state.autoShot) end, active=function() return state.autoShot end},
+        {id="KnifeNo", title="KnifeNo", toggle=function() UI.setKnifeNo(not state.knifeNo) end, active=function() return state.knifeNo end},
         {id="KillAll", title="Kill All", toggle=function() task.spawn(function() UI.runCombat("All") end) end},
         {id="KillSheriff", title="Kill Sheriff", toggle=function() task.spawn(function() UI.runCombat("Sheriff") end) end},
         {id="KillTarget", title="Kill Target", toggle=function() end},
@@ -3127,7 +3515,7 @@ do
         dock.Visible=false -- Cada acceso táctil es ahora un botón independiente.
     end
     -- Vincula cada opción al título real mostrado en su tarjeta.
-    local titleMap={Aim="FOV Circle + Aim",Jump="Infinite Jump",Speed="Velocidad",AimWall="Wallcheck",Notif="Notificaciones",Sound="Sonidos"}
+    local titleMap={KillAura="KILL AURA",AutoShot="AutoShot",KnifeNo="KnifeNo",Aim="FOV Circle + Aim",Jump="Infinite Jump",Speed="Velocidad",AimWall="Wallcheck",Notif="Notificaciones",Sound="Sonidos"}
     for i,entry in ipairs(shortcuts) do
         local cardTitle=titleMap[entry.id] or entry.title
         local host=UI.inlineShortcutCards[cardTitle]
@@ -3301,6 +3689,10 @@ local languages = {
         ["Marca la GunDrop a través de las paredes."]="Shows the dropped gun through walls with distance.",
         ["Busca la Gun Drop y regresa automáticamente."]="Finds the dropped gun and returns automatically.",
         ["Acción con Knife sobre el Sheriff, cuando está disponible."]="Knife action against Sheriff when available.",
+        ["KILL AURA"]="KILL AURA",["RADIO KILL AURA"]="KILL AURA RANGE",
+        ["Si sos Sheriff, equipa Gun del inventario y dispara solo al Murder visible."]="Automatically fires at a visible Murder with Gun. Respects blacklist and walls.",
+        ["Predice cuchillos TrailPart y esquiva sus trayectorias cuando existe un camino libre."]="Attempts to evade multiple incoming TrailPart projectiles.",
+        ["Ataca con Knife a objetivos que entran en el área. Respeta Blacklist."]="Uses Knife on targets within your chosen area. Respects Blacklist.",
         ["Excluye Murder y jugadores en blacklist."]="Targets within 5000 studs; excludes Murder and blacklist.",
         ["Sin jugador seleccionado"]="No player selected",["PLAYER ACTIONS"]="PLAYER ACTIONS",
         ["EJECUTAR"]="RUN",["GUARDAR"]="SAVE",["SUGERENCIAS"]="SUGGESTIONS",
@@ -3361,6 +3753,10 @@ local languages = {
         ["Marca la GunDrop a través de las paredes."]="Mostra a arma caída através das paredes e sua distância.",
         ["Busca la Gun Drop y regresa automáticamente."]="Encontra a arma caída e retorna automaticamente.",
         ["Acción con Knife sobre el Sheriff, cuando está disponible."]="Ação com faca contra Sheriff, quando disponível.",
+        ["KILL AURA"]="AURA DE ATAQUE",["RADIO KILL AURA"]="ALCANCE DA AURA",
+        ["Si sos Sheriff, equipa Gun del inventario y dispara solo al Murder visible."]="Atira automaticamente no Murder visível com Gun. Respeita a lista negra e as paredes.",
+        ["Predice cuchillos TrailPart y esquiva sus trayectorias cuando existe un camino libre."]="Tenta desviar de vários projéteis TrailPart que se aproximam.",
+        ["Ataca con Knife a objetivos que entran en el área. Respeta Blacklist."]="Usa faca em alvos dentro da área. Respeita a lista negra.",
         ["Excluye Murder y jugadores en blacklist."]="Alvos até 5000 studs; exclui Murder e lista negra.",["PLAYER ACTIONS"]="AÇÕES DE JOGADORES",
         ["Sin jugador seleccionado"]="Nenhum jogador selecionado",
         ["EJECUTAR"]="EXECUTAR",["GUARDAR"]="SALVAR",["SUGERENCIAS"]="SUGESTÕES",
