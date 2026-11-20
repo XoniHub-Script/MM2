@@ -465,18 +465,36 @@ local function option(p,titleValue,description,accent,callback)
 end
 
 
+-- Superficie estilizada independiente: el borde nunca se aplica al texto.
 local function actionOption(p,titleValue,description,accent,callback)
     local f=card(p,56)
     registerSearch(f,titleValue.." "..description,titleValue)
     text(f,titleValue,11,C.ink,true,{Position=UDim2.fromOffset(10,3),Size=UDim2.new(1,-173,0,21)})
     text(f,description,9,C.muted,false,{Position=UDim2.fromOffset(10,23),Size=UDim2.new(1,-173,0,30),TextWrapped=true})
-    local b=new("TextButton",f,{Position=UDim2.new(1,-86,.5,-12),Size=UDim2.fromOffset(77,24),BackgroundColor3=C.red,TextColor3=C.white,Text="EJECUTAR",TextSize=9,Font=Enum.Font.GothamBold,AutoButtonColor=false})
-    round(b,4)
+    local surface=new("Frame",f,{
+        Name="ExecuteBackground",Position=UDim2.new(1,-88,.5,-13),
+        Size=UDim2.fromOffset(80,26),BackgroundColor3=accent,BorderSizePixel=0
+    })
+    round(surface,6)
+    local border=line(surface,C.white,.56)
+    border.Thickness=1
+    new("UIGradient",surface,{Rotation=90,Color=ColorSequence.new({
+        ColorSequenceKeypoint.new(0,accent:Lerp(C.white,.19)),
+        ColorSequenceKeypoint.new(1,accent:Lerp(Color3.new(0,0,0),.26))
+    })})
+    local b=new("TextButton",surface,{
+        Name="ExecuteText",Size=UDim2.fromScale(1,1),BackgroundTransparency=1,
+        BorderSizePixel=0,Text="EJECUTAR",TextColor3=C.white,
+        TextSize=9,Font=Enum.Font.GothamBold,AutoButtonColor=false,
+        ZIndex=surface.ZIndex+1
+    })
+    connect(b.MouseEnter,function()tween(border,.14,{Transparency=.12})end)
+    connect(b.MouseLeave,function()tween(border,.14,{Transparency=.56})end)
     UI.inlineShortcutCards[titleValue]={card=f,main=b}
-    connect(b.MouseButton1Click,function()
+    connect(b.Activated,function()
         playSound(clickSound)
-        tween(b,.12,{BackgroundTransparency=.28})
-        task.delay(.2,function()if b.Parent then tween(b,.15,{BackgroundTransparency=0})end end)
+        tween(surface,.12,{BackgroundTransparency=.22})
+        task.delay(.2,function()if surface.Parent then tween(surface,.15,{BackgroundTransparency=0})end end)
         task.spawn(callback)
     end)
     return b
@@ -670,8 +688,8 @@ UI.setAutoKillAll = option(opPage, "Auto Kill All", "Cuando tu rol sea Murder, p
     state.autoKillAll = v
 end)
 pageTitle(pages.Target,"Target","Seleccioná un jugador para ver su perfil y usar las acciones.")
-UI.playerManageCard=card(pages.Target,310)
-registerSearch(UI.playerManageCard,"kill target objetivo buscar jugador blacklist unblacklist goto fling spectate target", "Player Actions")
+UI.playerManageCard=card(pages.Target,410)
+registerSearch(UI.playerManageCard,"kill target objetivo buscar jugador blacklist unblacklist goto fling fling murder fling sheriff spectate target", "Player Actions")
 text(UI.playerManageCard,"PLAYER ACTIONS",14,C.ink,true,{Position=UDim2.fromOffset(17,10),Size=UDim2.fromOffset(180,27)})
 UI.playerSearch=new("TextBox",UI.playerManageCard,{
     Position=UDim2.new(0,17,0,41),Size=UDim2.new(1,-70,0,30),
@@ -681,7 +699,7 @@ UI.playerSearch=new("TextBox",UI.playerManageCard,{
 round(UI.playerSearch,5)
 UI.playerToggle=new("TextButton",UI.playerManageCard,{Position=UDim2.new(1,-44,0,41),Size=UDim2.fromOffset(27,30),BackgroundColor3=C.dark,Text="−",TextColor3=C.white,Font=Enum.Font.GothamBold,TextSize=18,AutoButtonColor=false})
 round(UI.playerToggle,5)
-local edge=line(UI.playerToggle,C.red,.35); edge.Thickness=.8
+local edge=line(UI.playerToggle,C.red,.35);edge.Thickness=.8
 UI.playerList=new("ScrollingFrame",UI.playerManageCard,{
     Position=UDim2.new(0,17,0,78),Size=UDim2.new(1,-34,0,92),
     BackgroundColor3=C.dark,ScrollBarThickness=3,AutomaticCanvasSize=Enum.AutomaticSize.Y,
@@ -690,50 +708,82 @@ UI.playerList=new("ScrollingFrame",UI.playerManageCard,{
 round(UI.playerList,5)
 new("UIListLayout",UI.playerList,{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,3)})
 UI.playerSelected=text(UI.playerManageCard,"Sin jugador seleccionado",11,C.muted,false,{Position=UDim2.fromOffset(17,180),Size=UDim2.new(1,-34,0,18),TextTruncate=Enum.TextTruncate.AtEnd})
-UI.playerButtonRow=new("Frame",UI.playerManageCard,{Position=UDim2.fromOffset(17,208),Size=UDim2.new(1,-34,0,70),BackgroundTransparency=1})
-local function playerActionButton(parent, txt, x, width, color)
-    local b=new("TextButton",parent,{Position=UDim2.fromOffset(x,0),Size=UDim2.fromOffset(width,28),BackgroundColor3=color,TextColor3=C.white,Text=txt,Font=Enum.Font.GothamBold,TextSize=10,AutoButtonColor=false})
-    round(b,6)
-    return b
+UI.playerButtonRow=new("Frame",UI.playerManageCard,{Position=UDim2.fromOffset(17,208),Size=UDim2.new(1,-34,0,75),BackgroundTransparency=1})
+-- Cada botón lleva un Frame real de fondo con UICorner/UIStroke/UIGradient.
+-- El TextButton interior es transparente y conserva las letras sin contorno.
+local function playerActionButton(parent,caption,color)
+    local surface=new("Frame",parent,{
+        Name="ActionSurface",Size=UDim2.fromOffset(90,34),
+        BackgroundColor3=color,BorderSizePixel=0
+    })
+    round(surface,7)
+    local outline=line(surface,C.white,.58)
+    outline.Thickness=1
+    new("UIGradient",surface,{
+        Rotation=90,Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,color:Lerp(C.white,.18)),
+            ColorSequenceKeypoint.new(1,color:Lerp(Color3.new(0,0,0),.25))
+        })
+    })
+    local button=new("TextButton",surface,{
+        Name="ActionText",Size=UDim2.fromScale(1,1),
+        BackgroundTransparency=1,BorderSizePixel=0,Text=caption,
+        Font=Enum.Font.GothamBold,TextColor3=C.white,TextSize=10,
+        TextScaled=true,AutoButtonColor=false,Active=true,Selectable=true,
+        ZIndex=surface.ZIndex+1
+    })
+    new("UITextSizeConstraint",button,{MinTextSize=8,MaxTextSize=10})
+    connect(button.MouseEnter,function()tween(outline,.13,{Transparency=.15})end)
+    connect(button.MouseLeave,function()tween(outline,.13,{Transparency=.58})end)
+    return button
 end
--- Los cuatro controles se ajustan al ancho disponible; sin superposiciones.
 UI.targetActionGrid=new("UIGridLayout",UI.playerButtonRow,{
-    FillDirection=Enum.FillDirection.Horizontal,
-    FillDirectionMaxCells=3,
+    FillDirection=Enum.FillDirection.Horizontal,FillDirectionMaxCells=3,
     SortOrder=Enum.SortOrder.LayoutOrder,
-    CellSize=UDim2.new(0.333,-5,0,30),
-    CellPadding=UDim2.fromOffset(5,5)
+    CellSize=UDim2.new(1/3,-5,0,34),CellPadding=UDim2.fromOffset(6,7)
 })
--- Los botones del Target necesitan superficies tactiles mas grandes.
--- Se ajusta tambien en telefonos que tengan un teclado conectado.
 if UIS.TouchEnabled then
     UI.targetActionGrid.FillDirectionMaxCells=2
     UI.targetActionGrid.CellSize=UDim2.new(.5,-5,0,42)
-    UI.playerButtonRow.Size=UDim2.new(1,-34,0,140)
+    UI.playerButtonRow.Size=UDim2.new(1,-34,0,146)
 end
-UI.targetExecute=playerActionButton(UI.playerButtonRow,"KILL TARGET",0,70,C.red)
-UI.blacklistToggle=playerActionButton(UI.playerButtonRow,"BLACKLIST",0,65,C.blue)
-UI.gotoButton=playerActionButton(UI.playerButtonRow,"GOTO",0,45,C.navy)
-UI.flingButton=playerActionButton(UI.playerButtonRow,"FLING",0,47,C.red)
-UI.spectateButton=playerActionButton(UI.playerButtonRow,"SPECTATE",0,65,C.blue)
-for index,button in ipairs({UI.targetExecute,UI.blacklistToggle,UI.gotoButton,UI.flingButton,UI.spectateButton}) do
-    button.LayoutOrder=index
-    button.Position=UDim2.fromOffset(0,0)
-    button.Size=UDim2.fromOffset(60,30)
-    button.Active=true
-    button.Selectable=true
-    button.TextScaled=true
-    new("UITextSizeConstraint",button,{MinTextSize=8,MaxTextSize=10})
+UI.targetExecute=playerActionButton(UI.playerButtonRow,"KILL TARGET",C.red)
+UI.blacklistToggle=playerActionButton(UI.playerButtonRow,"BLACKLIST",C.blue)
+UI.gotoButton=playerActionButton(UI.playerButtonRow,"GOTO",C.navy)
+UI.flingButton=playerActionButton(UI.playerButtonRow,"FLING",C.red)
+UI.spectateButton=playerActionButton(UI.playerButtonRow,"SPECTATE",C.blue)
+for order,button in ipairs({UI.targetExecute,UI.blacklistToggle,UI.gotoButton,UI.flingButton,UI.spectateButton}) do
+    button.Parent.LayoutOrder=order
 end
+-- Los FLING por rol están MÁS ABAJO, en su propia fila de dos columnas.
+UI.roleFlingRow=new("Frame",UI.playerManageCard,{
+    Name="RoleFlingRow",Position=UDim2.fromOffset(17,310),
+    Size=UDim2.new(1,-34,0,40),BackgroundTransparency=1
+})
+UI.roleFlingGrid=new("UIGridLayout",UI.roleFlingRow,{
+    FillDirection=Enum.FillDirection.Horizontal,FillDirectionMaxCells=2,
+    SortOrder=Enum.SortOrder.LayoutOrder,
+    CellSize=UDim2.new(.5,-5,1,0),CellPadding=UDim2.fromOffset(10,0)
+})
+UI.flingMurderButton=playerActionButton(UI.roleFlingRow,"FLING MURDER",C.red)
+UI.flingSheriffButton=playerActionButton(UI.roleFlingRow,"FLING SHERIFF",C.sheriff)
+UI.flingMurderButton.Parent.LayoutOrder=1
+UI.flingSheriffButton.Parent.LayoutOrder=2
 local function redrawPlayerList()
     local collapsed=config.targetCollapsed
     UI.playerToggle.Text=collapsed and "+" or "−"
     UI.playerList.Visible=not collapsed
     UI.playerSelected.Visible=not collapsed
     UI.playerButtonRow.Visible=not collapsed
-    UI.playerManageCard.Size=UDim2.new(1,0,0,collapsed and 82 or (UIS.TouchEnabled and 372 or 310))
+    UI.roleFlingRow.Visible=not collapsed
+    UI.roleFlingRow.Position=UDim2.fromOffset(17,UIS.TouchEnabled and 370 or 310)
+    UI.playerManageCard.Size=UDim2.new(1,0,0,collapsed and 82 or (UIS.TouchEnabled and 442 or 410))
 end
-connect(UI.playerToggle.MouseButton1Click,function() config.targetCollapsed=not config.targetCollapsed; redrawPlayerList(); playSound(clickSound) end)
+connect(UI.playerToggle.Activated,function()
+    config.targetCollapsed=not config.targetCollapsed
+    redrawPlayerList()
+    playSound(clickSound)
+end)
 redrawPlayerList()
 
 -- Una lista amplia con fotos de perfil, selección visible y estado de blacklist.
@@ -741,7 +791,7 @@ function UI.updateTargetButtons()
     local player=state.targetUserId and Players:GetPlayerByUserId(state.targetUserId)
     local blacklisted=player and state.blacklist[player.UserId] or false
     UI.blacklistToggle.Text=blacklisted and "UNBLACKLIST" or "BLACKLIST"
-    UI.blacklistToggle.BackgroundColor3=blacklisted and C.mint or C.blue
+    UI.blacklistToggle.Parent.BackgroundColor3=blacklisted and C.mint or C.blue
     UI.spectateButton.Text=(player and state.spectatingUserId==player.UserId) and "STOP SPEC" or "SPECTATE"
 end
 local function refreshPlayerList()
@@ -2278,32 +2328,68 @@ do
         return nil, char
     end
 
+    -- Comprobar varias superficies de cada parte: si el torso está libre se
+    -- prioriza; si no, se intenta con cabeza, brazos o piernas visibles.
+    -- La validación final del disparo siempre corresponde al servidor.
     local function bestVisibleMurder(origin, char)
-        local bestPosition = nil
-        local nearest = 150
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = {char}
-        params.IgnoreWater = true
-
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= me and not state.blacklist[player.UserId]
-                and UI.getStableEspRole(player) == "Murder" then
-                local other = player.Character
-                local enemyHum = other and other:FindFirstChildOfClass("Humanoid")
-                local body = other and (other:FindFirstChild("Body")
-                    or other:FindFirstChild("UpperTorso")
-                    or other:FindFirstChild("Torso")
-                    or other:FindFirstChild("HumanoidRootPart")
-                    or other:FindFirstChild("Head"))
-                if enemyHum and enemyHum.Health > 0 and body and body:IsA("BasePart") then
-                    local delta = body.Position - origin
-                    local dist = delta.Magnitude
-                    if dist > .1 and dist < nearest then
-                        local hit = workspace:Raycast(origin, delta, params)
-                        if hit and hit.Instance:IsDescendantOf(other) then
-                            nearest = dist
-                            bestPosition = body.Position
+        local params=RaycastParams.new()
+        params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={char}
+        params.IgnoreWater=true
+        local bestPosition,bestDistance=nil,150
+        local partNames={"Body","UpperTorso","Torso","Head","LeftUpperArm","RightUpperArm",
+            "LeftLowerArm","RightLowerArm","LeftHand","RightHand","Left Arm","Right Arm",
+            "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","Left Leg","Right Leg",
+            "HumanoidRootPart"}
+        local offsets={
+            Vector3.new(0,0,0),
+            Vector3.new(.42,0,0),Vector3.new(-.42,0,0),
+            Vector3.new(0,.42,0),Vector3.new(0,-.42,0),
+            Vector3.new(0,0,.42),Vector3.new(0,0,-.42),
+            Vector3.new(.38,.38,0),Vector3.new(-.38,.38,0),
+            Vector3.new(.38,-.38,0),Vector3.new(-.38,-.38,0)
+        }
+        for _,player in ipairs(Players:GetPlayers()) do
+            if player~=me and not state.blacklist[player.UserId]
+                and UI.getStableEspRole(player)=="Murder" then
+                local other=player.Character
+                local hum=other and other:FindFirstChildOfClass("Humanoid")
+                local pivot=other and other:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health>0 and pivot then
+                    local totalDist=(pivot.Position-origin).Magnitude
+                    if totalDist<150 then
+                        for index,name in ipairs(partNames) do
+                            local bodyPart=other:FindFirstChild(name)
+                            if bodyPart and bodyPart:IsA("BasePart") then
+                                -- Prefiere la primera parte visible (torso antes que miembros).
+                                local partHalf=bodyPart.Size*.5
+                                for _,fraction in ipairs(offsets) do
+                                    local sample=bodyPart.CFrame:PointToWorldSpace(Vector3.new(
+                                        fraction.X*partHalf.X*1.9,
+                                        fraction.Y*partHalf.Y*1.9,
+                                        fraction.Z*partHalf.Z*1.9
+                                    ))
+                                    local delta=sample-origin
+                                    local dist=delta.Magnitude
+                                    if dist>.1 and dist<150 then
+                                        local hit=workspace:Raycast(origin,delta,params)
+                                        if hit and hit.Instance:IsDescendantOf(other) then
+                                            -- Torso gana cuando es visible; entre Murder se toma
+                                            -- el más próximo. No apunta a terceros o blacklist.
+                                            local priority=(index<=3) and 0 or 1
+                                            local currentPriority=bestPosition and bestDistance.priority or 2
+                                            if not bestPosition or priority<currentPriority
+                                                or (priority==currentPriority and totalDist<bestDistance.distance) then
+                                                bestPosition=sample
+                                                bestDistance={priority=priority,distance=totalDist}
+                                            end
+                                            break
+                                        end
+                                    end
+                                end
+                                if bestPosition and bestDistance.priority==0
+                                    and bestDistance.distance==totalDist then break end
+                            end
                         end
                     end
                 end
@@ -2334,7 +2420,7 @@ do
         if not tool then
             human:EquipTool(inventoryGun)
             -- Esperar al siguiente ciclo para que Handle/Attachment se actualicen.
-            dodger.nextShot = os.clock() + .16
+            dodger.nextShot = os.clock() + .075
             return
         end
 
@@ -2348,7 +2434,7 @@ do
         local shoot = tool:FindFirstChild("Shoot")
         if not (shoot and shoot:IsA("RemoteEvent")) then return end
         shoot:FireServer(origin, CFrame.lookAt(target, target + origin.LookVector))
-        dodger.nextShot = os.clock() + .48
+        dodger.nextShot = os.clock() + .18
     end
 
     local function clearFlightMovement()
@@ -2459,7 +2545,7 @@ do
             task.wait(.045)
             local now = os.clock()
             if state.autoShot and now >= dodger.nextShot then
-                dodger.nextShot = now+.48
+                dodger.nextShot = now+.18
                 pcall(shootMurder)
             end
             if state.knifeNo and now >= dodger.nextDodge then
@@ -2880,6 +2966,41 @@ connect(UI.flingButton.Activated,function()
         local message = ok and "Acción finalizada (resultado sujeto al servidor)" or "No se pudo ejecutar"
         notify("Fling", message, ok and C.mint or C.orange)
     end)
+end)
+-- Acciones Fling por rol. Se usa exactamente la misma rutina de recuperación
+-- y se respeta la blacklist; no se ejecutan dos flings simultáneos.
+function UI.flingByRole(role)
+    if flingBusy or state.busy or combatBusy then
+        notify("Fling "..role,"Ya hay otra acción en curso",C.orange)
+        return
+    end
+    local origin=me.Character and me.Character:FindFirstChild("HumanoidRootPart")
+    local selected=nil
+    local nearest=math.huge
+    for _,player in ipairs(Players:GetPlayers()) do
+        if player~=me and not state.blacklist[player.UserId] and UI.getStableEspRole(player)==role then
+            local targetRoot=UI.getTargetRoot(player)
+            local humanoid=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if targetRoot and humanoid and humanoid.Health>0 then
+                local d=origin and (targetRoot.Position-origin.Position).Magnitude or 0
+                if d<nearest then nearest=d; selected=player end
+            end
+        end
+    end
+    if not selected then
+        notify("Fling "..role,"No se encontró un objetivo de ese rol",C.orange)
+        return
+    end
+    local succeeded=UI.executeFlingSingle(selected)
+    notify("Fling "..role,succeeded and "Acción finalizada" or "No se pudo ejecutar",succeeded and C.mint or C.orange)
+end
+connect(UI.flingMurderButton.Activated,function()
+    playSound(clickSound)
+    task.spawn(function() UI.flingByRole("Murder") end)
+end)
+connect(UI.flingSheriffButton.Activated,function()
+    playSound(clickSound)
+    task.spawn(function() UI.flingByRole("Sheriff") end)
 end)
 connect(UI.gotoButton.MouseButton1Click,function()
     if not state.targetUserId then
